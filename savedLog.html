@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Saved Log - AI Video Query</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { primary: '#165DFF', secondary: '#36CFC9' },
+                    fontFamily: { inter: ['Inter', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn-hover {
+                @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+            }
+        }
+    </style>
+    <style>
+        .page-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .saved-log-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .saved-log-select {
+            width: 100%;
+            max-width: 320px;
+            padding: 12px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            background: white;
+            color: #111827;
+            font-size: 14px;
+        }
+
+        .saved-log-container {
+            border: 1px solid #e5e7eb;
+            border-radius: 16px;
+            background: #f8fafc;
+            padding: 20px;
+        }
+
+        .saved-log-entry {
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: white;
+            border: 1px solid #e5e7eb;
+            color: #374151;
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+
+        .saved-log-entry:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body class="font-inter bg-gray-50 min-h-screen">
+    <nav class="bg-white shadow-md fixed w-full z-50 relative">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center gap-4 pl-8">
+                <a href="main.html" class="text-xl font-bold text-primary flex items-center gap-2">
+                    <i class="fas fa-video"></i> AI Video Query
+                </a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="savedLog.html" class="text-primary font-semibold flex items-center gap-2"><i class="fas fa-bookmark"></i> Bookmark</a>
+                <a href="index.html" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Log Out</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-2 pb-10">
+        <div class="page-content">
+            <div class="max-w-5xl mx-auto bg-white rounded-2xl shadow p-8">
+            <h1 class="text-2xl font-bold text-gray-800 mb-4">Saved Log</h1>
+            <p class="text-gray-600 mb-6">Choose a video to view its matching saved log.</p>
+
+            <div class="saved-log-toolbar">
+                <label for="savedLogVideo" class="text-sm font-semibold text-gray-700">Select video log</label>
+                <select id="savedLogVideo" class="saved-log-select">
+                    <option value="coin_001.mp4">COIN_001: Making Coffee</option>
+                    <option value="coin_002.mp4">COIN_002: Assembling a Bicycle</option>
+                    <option value="coin_003.mp4">COIN_003: Cooking Pasta</option>
+                    <option value="coin_004.mp4">COIN_004: Planting a Tree</option>
+                </select>
+            </div>
+
+            <div class="saved-log-container" id="savedLogContainer"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const savedLogs = {
+            'coin_001.mp4': [
+                '[8:38:19 PM] Started processing: coin_001.mp4',
+                '[8:38:19 PM] Sampled frame #1 (fixed rate)',
+                '[8:38:19 PM] Encoded frame #1 -> embedding: emb_1_bc8898',
+                '[8:38:20 PM] Sampled frame #2 (fixed rate)',
+                '[8:38:20 PM] Encoded frame #2 -> embedding: emb_2_2d65ec',
+                '[8:38:21 PM] Sampled frame #3 (fixed rate)',
+                '[8:38:21 PM] Encoded frame #3 -> embedding: emb_3_49d201',
+                '[8:38:22 PM] Sampled frame #4 (fixed rate)',
+                '[8:38:22 PM] Encoded frame #4 -> embedding: emb_4_2281ca',
+                '[8:38:23 PM] Streaming stopped by user',
+                '[8:38:42 PM] User question: how is the coffee made?',
+                '[8:38:42 PM] Generated answer with timestamp evidence'
+            ],
+            'coin_002.mp4': [
+                '[9:02:11 PM] Started processing: coin_002.mp4',
+                '[9:02:11 PM] Sampled frame #1 (fixed rate)',
+                '[9:02:11 PM] Encoded frame #1 -> embedding: emb_1_a8f341',
+                '[9:02:12 PM] Sampled frame #2 (fixed rate)',
+                '[9:02:12 PM] Encoded frame #2 -> embedding: emb_2_5ce118',
+                '[9:02:14 PM] New event detected: [1 -> 5] (time window)',
+                '[9:02:19 PM] Memory updated: Kept important events | Merged low-relevance events',
+                '[9:02:23 PM] Streaming stopped by user',
+                '[9:02:39 PM] User question: what part was assembled first?',
+                '[9:02:39 PM] Generated answer with timestamp evidence'
+            ],
+            'coin_003.mp4': [
+                '[7:14:03 PM] Started processing: coin_003.mp4',
+                '[7:14:03 PM] Sampled frame #1 (fixed rate)',
+                '[7:14:03 PM] Encoded frame #1 -> embedding: emb_1_d1f402',
+                '[7:14:05 PM] Forecasted query types: What (action), When (timing), How (steps)',
+                '[7:14:08 PM] New event detected: [1 -> 5] (time window)',
+                '[7:14:10 PM] Streaming stopped by user',
+                '[7:14:26 PM] User question: when was the pasta added to the pot?',
+                '[7:14:26 PM] Generated answer with timestamp evidence'
+            ],
+            'coin_004.mp4': [
+                '[6:51:44 PM] Started processing: coin_004.mp4',
+                '[6:51:44 PM] Sampled frame #1 (fixed rate)',
+                '[6:51:44 PM] Encoded frame #1 -> embedding: emb_1_91de77',
+                '[6:51:46 PM] Sampled frame #2 (fixed rate)',
+                '[6:51:46 PM] Encoded frame #2 -> embedding: emb_2_3410aa',
+                '[6:51:49 PM] New event detected: [1 -> 5] (time window)',
+                '[6:51:53 PM] Streaming stopped by user',
+                '[6:52:07 PM] User question: how deep was the hole prepared?',
+                '[6:52:07 PM] Generated answer with timestamp evidence'
+            ]
+        };
+
+        const savedLogVideo = document.getElementById('savedLogVideo');
+        const savedLogContainer = document.getElementById('savedLogContainer');
+
+        function renderSavedLog(video) {
+            const entries = savedLogs[video] || [];
+            savedLogContainer.innerHTML = entries
+                .map(entry => `<div class="saved-log-entry">${entry}</div>`)
+                .join('');
+        }
+
+        savedLogVideo.addEventListener('change', event => {
+            renderSavedLog(event.target.value);
+        });
+
+        renderSavedLog(savedLogVideo.value);
+    </script>
+</body>
+</html>

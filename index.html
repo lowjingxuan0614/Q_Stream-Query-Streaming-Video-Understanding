@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Query - Home</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { primary: '#165DFF', secondary: '#36CFC9' }, fontFamily: { inter: ['Inter','sans-serif'] } } }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities { .btn-hover { @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1; } }
+    </style>
+</head>
+<body class="font-inter bg-gray-50 min-h-screen">
+    <nav class="bg-white shadow-md fixed w-full z-50">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <a href="index.html" class="text-xl font-bold text-primary flex items-center gap-2">
+                <i class="fas fa-video"></i> AI Video Query
+            </a>
+            <div class="flex gap-4">
+                <a href="login.html" class="px-4 py-2 border border-primary text-primary rounded-lg btn-hover">Login</a>
+                <a href="signup.html" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Sign Up</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-20">
+        <section class="min-h-screen flex items-center">
+            <div class="container mx-auto px-4 py-10">
+                <div class="grid md:grid-cols-2 gap-10 items-center">
+                    <div>
+                        <h1 class="text-[clamp(2rem,5vw,3.5rem)] font-bold leading-tight mb-6">
+                            Ask Questions <br><span class="text-primary">About Streaming Video</span>
+                        </h1>
+                        <p class="text-lg text-gray-600 mb-8">Choose a video, ask questions, save queries, and track processing history with AI power.</p>
+                        <div class="flex gap-4">
+                            <a href="signup.html" class="px-8 py-3 bg-primary text-white rounded-lg btn-hover">Get Started</a>
+                            <!-- <a href="#features" class="px-8 py-2 border rounded-lg btn-hover">Learn More</a> -->
+                        </div>
+                    </div>
+                    <div class="flex justify-center">
+                        <video src="index_video.mp4" class="w-full max-w-xl rounded-xl" autoplay muted loop playsinline></video>
+                    </div>
+                </div>
+
+                <div id="features" class="py-20">
+                    <h2 class="text-3xl font-bold text-center mb-12">Features</h2>
+                    <div class="grid md:grid-cols-3 gap-8">
+                        <div class="bg-white p-6 rounded-xl shadow text-center">
+                            <i class="fas fa-question text-primary text-2xl mb-4"></i>
+                            <h3 class="font-bold mb-2">Video Q&A</h3>
+                            <p class="text-gray-600">Get instant answers about your video content</p>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow text-center">
+                            <i class="fas fa-bookmark text-primary text-2xl mb-4"></i>
+                            <h3 class="font-bold mb-2">Save Bookmarks</h3>
+                            <p class="text-gray-600">Save important queries for later access</p>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow text-center">
+                            <i class="fas fa-history text-primary text-2xl mb-4"></i>
+                            <h3 class="font-bold mb-2">Processing Logs</h3>
+                            <p class="text-gray-600">Track all queries with video title and timestamps</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bg-gray-900 text-white py-6 text-center">
+        <p>&copy; 2026 AI Video Query</p>
+    </footer>
+</body>
+</html>
