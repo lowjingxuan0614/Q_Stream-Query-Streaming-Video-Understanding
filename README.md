@@ -1,2 +1,19 @@
-#to run the code
-python -m http.server 8000 
+# To run the code
+
+Use the local Python server so login, signup, sessions, and bookmarks can use SQLite:
+
+```bash
+python server.py
+```
+
+Open:
+
+```text
+http://localhost:5500/
+```
+
+The SQLite database is stored at:
+
+```text
+database/app.sqlite3
+```

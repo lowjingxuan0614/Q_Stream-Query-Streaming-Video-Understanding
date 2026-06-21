@@ -347,7 +347,7 @@
             </div>
             <div class="flex items-center gap-4">
                 <a href="savedLog.html" class="text-primary font-semibold flex items-center gap-2"><i class="fas fa-bookmark"></i> Bookmark</a>
-                <a href="index.html" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Log Out</a>
+                <a href="/logout" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Log Out</a>
             </div>
         </div>
     </nav>
@@ -373,11 +373,7 @@
             
             <!-- Dropdown for COIN Dataset Videos -->
             <select id="videoSelector" class="video-selector">
-                <option value="">-- Select a COIN Dataset Video --</option>
-                <option value="making_coffee.mp4">COIN_001: Making Coffee</option>
-                <option value="assemble_bicycle.mp4">COIN_002: Assembling a Bicycle</option>
-                <option value="cooking_pasta.mp4">COIN_003: Cooking Pasta</option>
-                <option value="planting_tree.mp4">COIN_004: Planting a Tree</option>
+                <option value="">Loading COIN dataset videos from AutoDL...</option>
             </select>
 
             <div class="video-controls">
@@ -386,7 +382,7 @@
             </div>
 
             <!-- Video Player Area -->
-            <video class="video-player" id="videoPlayer" playsinline></video>
+            <video class="video-player" id="videoPlayer" controls playsinline preload="metadata"></video>
 
             <!-- Processing Progress Bar -->
             <div class="progress-container">
@@ -431,48 +427,156 @@
     </footer>
 
     <script>
-        // Global state
+        const APP_BASE = window.location.origin;
+        const AI_BASE = "http://localhost:8000";
+
         let isStreaming = false;
         let frameCount = 0;
+        let selectedVideoId = "";
+        let selectedVideoInfo = null;
+        let currentJobId = null;
+        let statusPollTimer = null;
+        let pipelineTimer = null;
+        let lastBackendMessage = "";
+        let renderedLogIndex = 0;
+        let currentUser = null;
+
         let logContainer = document.getElementById('logContainer');
         let progressBar = document.getElementById('progressBar');
         let videoSelector = document.getElementById('videoSelector');
         let videoPlayer = document.getElementById('videoPlayer');
         let saveLogNotice = document.getElementById('saveLogNotice');
 
-        // --------------------------
-        // Core UI Functions
-        // --------------------------
+        document.addEventListener("DOMContentLoaded", async () => {
+            const user = await requireLogin();
+            if (user) {
+                loadDatasetVideos();
+            }
+        });
 
-        // Start video streaming & processing pipeline
-        function startStreaming() {
-            const selectedVideo = videoSelector.value;
-            if (!selectedVideo) {
-                alert("Please select a video first!");
+        async function requireLogin() {
+            try {
+                const res = await fetch(`${APP_BASE}/api/me`);
+                if (!res.ok) {
+                    window.location.href = "login.html";
+                    return null;
+                }
+
+                const data = await res.json();
+                currentUser = data.user;
+                return currentUser;
+            } catch (err) {
+                console.error(err);
+                window.location.href = "login.html";
+                return null;
+            }
+        }
+
+        async function loadDatasetVideos() {
+            try {
+                addLog(`Connecting to AutoDL AI backend: ${AI_BASE}/videos`, "log-frame");
+                const res = await fetch(`${AI_BASE}/videos`);
+                if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+
+                const data = await res.json();
+
+                videoSelector.innerHTML = '<option value="">-- Select a COIN Dataset Video --</option>';
+
+                data.videos.forEach((video, index) => {
+                    const option = document.createElement("option");
+                    option.value = video.video_id;
+                    option.textContent = `COIN_${String(index + 1).padStart(3, "0")}: ${video.filename}`;
+                    option.dataset.filename = video.filename;
+                    option.dataset.path = video.path;
+                    videoSelector.appendChild(option);
+                });
+
+                addLog(`Loaded ${data.count} COIN dataset videos from AutoDL`, "log-frame");
+            } catch (err) {
+                console.error(err);
+                videoSelector.innerHTML = '<option value="">Failed to load videos from AutoDL</option>';
+                addLog(`Failed to load AutoDL videos: ${err.message}`, "log-answer");
+            }
+        }
+
+        videoSelector.addEventListener("change", () => {
+            const option = videoSelector.options[videoSelector.selectedIndex];
+
+            selectedVideoId = videoSelector.value;
+            selectedVideoInfo = selectedVideoId ? {
+                video_id: selectedVideoId,
+                filename: option.dataset.filename,
+                path: option.dataset.path
+            } : null;
+
+            if (selectedVideoInfo) {
+                addLog(`Selected dataset video: ${selectedVideoInfo.filename}`, "log-frame");
+
+                // Load the real video from AutoDL backend into the player.
+                videoPlayer.src = `${AI_BASE}/coin_videos/${encodeURIComponent(selectedVideoInfo.filename)}`;
+                videoPlayer.load();
+            }
+        });
+
+        async function startStreaming() {
+            if (!selectedVideoId) {
+                alert("Please select a COIN dataset video first!");
                 return;
             }
 
             isStreaming = true;
             frameCount = 0;
+            currentJobId = null;
+            lastBackendMessage = "";
+            renderedLogIndex = 0;
             progressBar.style.width = "0%";
             clearLog();
-            videoPlayer.src = selectedVideo;
-            videoPlayer.load();
+
+            addLog(`Selected video: ${selectedVideoInfo.filename}`, "log-frame");
+            addLog(`Video ID: ${selectedVideoId}`, "log-frame");
+
             videoPlayer.play().catch(() => {});
-            addLog(`Started processing: ${selectedVideo}`, 'log-frame');
-            
-            // Simulate real-time processing pipeline
-            runProcessingPipeline();
+
+            try {
+                const res = await fetch(`${AI_BASE}/process`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        video_id: selectedVideoId,
+                        model: "qwen2.5vl:7b",
+                        force: true,
+                        force_description: true
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+                currentJobId = data.job_id;
+                addLog(`Backend job started: ${currentJobId}`, "log-event");
+                updateProgress(10);
+                pollJobStatus(currentJobId);
+            } catch (err) {
+                console.error(err);
+                addLog(`Failed to start backend processing: ${err.message}`, "log-answer");
+                isStreaming = false;
+            }
         }
 
-        // Stop streaming
         function stopStreaming() {
             isStreaming = false;
             videoPlayer.pause();
-            addLog("Streaming stopped by user", 'log-frame');
+            if (statusPollTimer) {
+                clearTimeout(statusPollTimer);
+                statusPollTimer = null;
+            }
+
+            addLog("Streaming stopped by user", "log-frame");
         }
 
-        // Add log entry to UI (matches your processing steps)
         function addLog(message, type) {
             const entry = document.createElement('div');
             entry.className = `log-entry ${type}`;
@@ -481,85 +585,186 @@
             logContainer.scrollTop = logContainer.scrollHeight;
         }
 
-        // Clear log
         function clearLog() {
             logContainer.innerHTML = '';
         }
 
-        // Update progress bar
         function updateProgress(percent) {
-            progressBar.style.width = `${percent}%`;
+            progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
         }
 
-        function saveLog() {
-            saveLogNotice.classList.add('show');
+        async function saveLog() {
+            const logs = Array.from(logContainer.querySelectorAll(".log-entry"))
+                .map(entry => entry.textContent)
+                .filter(Boolean)
+                .join("\n");
+
+            if (!logs) {
+                alert("There is no log to save yet.");
+                return;
+            }
+
+            try {
+                const res = await fetch(`${APP_BASE}/api/bookmarks`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        video_id: selectedVideoId || null,
+                        video_title: selectedVideoInfo?.filename || "Unsaved video log",
+                        log_text: logs
+                    })
+                });
+
+                if (res.status === 401) {
+                    window.location.href = "login.html";
+                    return;
+                }
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `Save failed with status ${res.status}`);
+                }
+
+                saveLogNotice.classList.add('show');
+            } catch (err) {
+                console.error(err);
+                alert(`Failed to save log: ${err.message}`);
+            }
         }
 
         function hideSaveLogNotice() {
             saveLogNotice.classList.remove('show');
         }
 
-        // --------------------------
-        // Simulate Your Processing Pipeline
-        // Connect YOUR backend code here!
-        // --------------------------
-        function runProcessingPipeline() {
+        async function pollJobStatus(jobId) {
             if (!isStreaming) return;
 
-            // 1. Streaming Frame Sampling (1.2.2)
-            frameCount++;
-            addLog(`Sampled frame #${frameCount} (fixed rate)`, 'log-frame');
-            
-            // 2. Frame Encoding (1.2.3)
-            const embedding = `emb_${frameCount}_${Math.random().toString(16).slice(2,8)}`;
-            addLog(`Encoded frame #${frameCount} → embedding: ${embedding}`, 'log-encode');
+            try {
+                const res = await fetch(`${AI_BASE}/status/${jobId}`);
+                if (!res.ok) throw new Error(`Status request failed: ${res.status}`);
 
-            // 3. Event Construction (1.2.4)
-            if (frameCount % 5 === 0) {
-                const eventStart = frameCount - 4;
-                addLog(`New event detected: [${eventStart} → ${frameCount}] (time window)`, 'log-event');
+                const status = await res.json();
+
+                renderBackendLogs(status.logs || []);
+
+                if (status.message && status.message !== lastBackendMessage) {
+                    lastBackendMessage = status.message;
+                    updateProgressFromBackendStatus(status.message, status.status);
+                }
+
+                if (status.status === "done") {
+                    isStreaming = false;
+                    updateProgress(100);
+                    addLog("Processing completed. events_with_descriptions.json is ready.", "log-memory");
+                    return;
+                }
+
+                if (status.status === "failed") {
+                    isStreaming = false;
+                    addLog(`Backend processing failed: ${status.message}`, "log-answer");
+                    return;
+                }
+
+                statusPollTimer = setTimeout(() => pollJobStatus(jobId), 3000);
+            } catch (err) {
+                console.error(err);
+                addLog(`Could not retrieve backend status: ${err.message}`, "log-answer");
+                statusPollTimer = setTimeout(() => pollJobStatus(jobId), 5000);
             }
-
-            // 4. Query Forecasting (1.2.5)
-            if (frameCount % 8 === 0) {
-                addLog(`Forecasted query types: What (action), When (timing), How (steps)`, 'log-query');
-            }
-
-            // 5. Query-Aware Memory Management (1.2.6)
-            if (frameCount % 10 === 0) {
-                addLog(`Memory updated: Kept important events | Merged low-relevance events`, 'log-memory');
-            }
-
-            // Update progress
-            updateProgress(Math.min(100, (frameCount / 100) * 100));
-
-            // Repeat every 1 second (simulate real-time stream)
-            setTimeout(runProcessingPipeline, 1000);
         }
 
-        // --------------------------
-        // Q&A: Evidence-Grounded Answering (1.2.7)
-        // --------------------------
-        function submitQuestion() {
+        function renderBackendLogs(logs) {
+            for (let i = renderedLogIndex; i < logs.length; i++) {
+                const item = logs[i];
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${item.type || "log-frame"}`;
+                entry.textContent = `[${item.time || new Date().toLocaleTimeString()}] ${item.message}`;
+                logContainer.appendChild(entry);
+            }
+
+            renderedLogIndex = logs.length;
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function addBackendStatusLog(message) {
+            const lower = message.toLowerCase();
+
+            if (lower.includes("resolving")) {
+                addLog(`Backend: ${message}`, "log-frame");
+            } else if (lower.includes("pipeline") || lower.includes("4.2") || lower.includes("4.4")) {
+                addLog(`Backend: ${message}`, "log-encode");
+            } else if (lower.includes("description")) {
+                addLog(`Backend: ${message}`, "log-query");
+            } else if (lower.includes("done") || lower.includes("finished")) {
+                addLog(`Backend: ${message}`, "log-memory");
+            } else {
+                addLog(`Backend: ${message}`, "log-event");
+            }
+        }
+
+        function updateProgressFromBackendStatus(message, status) {
+            const lower = message.toLowerCase();
+
+            if (status === "done") {
+                updateProgress(100);
+            } else if (lower.includes("resolving")) {
+                updateProgress(15);
+            } else if (lower.includes("4.2") || lower.includes("4.4") || lower.includes("pipeline")) {
+                updateProgress(45);
+            } else if (lower.includes("description")) {
+                updateProgress(75);
+            } else if (status === "running") {
+                updateProgress(30);
+            }
+        }
+
+        async function submitQuestion() {
             const question = document.getElementById('userQuery').value.trim();
+
             if (!question) {
                 alert("Please enter a question!");
                 return;
             }
 
-            addLog(`User question: ${question}`, 'log-answer');
-            
-            // Simulate answer retrieval (replace with your backend logic)
-            const mockAnswer = "The first step in the video is to grind the coffee beans using a manual grinder.";
-            const mockEvidence = "Evidence Timestamps: 00:02 → 00:05 (Event #1) | Relevant to: What (action), When (timing)";
-            
-            // Display answer + evidence
-            document.getElementById('answerDisplay').textContent = mockAnswer;
-            const evidenceEl = document.getElementById('evidenceDisplay');
-            evidenceEl.textContent = mockEvidence;
-            evidenceEl.style.display = "block";
+            if (!selectedVideoId) {
+                alert("Please select a COIN dataset video first!");
+                return;
+            }
 
-            addLog(`Generated answer with timestamp evidence`, 'log-answer');
+            addLog(`User question: ${question}`, 'log-answer');
+            document.getElementById('answerDisplay').textContent = "Retrieving evidence-grounded answer from AutoDL backend...";
+            document.getElementById('evidenceDisplay').style.display = "none";
+
+            try {
+                const res = await fetch(`${AI_BASE}/ask`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        video_id: selectedVideoId,
+                        question: question,
+                        model: "qwen2.5vl:7b"
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+
+                document.getElementById('answerDisplay').textContent = data.answer;
+
+                const evidenceEl = document.getElementById('evidenceDisplay');
+                evidenceEl.textContent = `Evidence source: ${data.num_events_used}/${data.total_events} event descriptions from events_with_descriptions.json`;
+                evidenceEl.style.display = "block";
+
+                addLog(`Generated answer using ${data.num_events_used}/${data.total_events} event descriptions`, 'log-answer');
+            } catch (err) {
+                console.error(err);
+                document.getElementById('answerDisplay').textContent = "Failed to retrieve answer from backend.";
+                addLog(`Q&A failed: ${err.message}`, 'log-answer');
+            }
         }
     </script>
 </body>

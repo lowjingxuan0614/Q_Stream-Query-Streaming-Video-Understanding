@@ -50,6 +50,31 @@
             font-size: 14px;
         }
 
+        .saved-log-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .saved-log-delete {
+            padding: 12px 14px;
+            border: 1px solid #fecaca;
+            border-radius: 12px;
+            background: #fef2f2;
+            color: #991b1b;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .saved-log-delete:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
         .saved-log-container {
             border: 1px solid #e5e7eb;
             border-radius: 16px;
@@ -71,6 +96,11 @@
         .saved-log-entry:last-child {
             margin-bottom: 0;
         }
+
+        .saved-log-empty {
+            color: #64748b;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body class="font-inter bg-gray-50 min-h-screen">
@@ -83,7 +113,7 @@
             </div>
             <div class="flex items-center gap-4">
                 <a href="savedLog.html" class="text-primary font-semibold flex items-center gap-2"><i class="fas fa-bookmark"></i> Bookmark</a>
-                <a href="index.html" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Log Out</a>
+                <a href="/logout" class="px-4 py-2 bg-primary text-white rounded-lg btn-hover">Log Out</a>
             </div>
         </div>
     </nav>
@@ -96,12 +126,12 @@
 
             <div class="saved-log-toolbar">
                 <label for="savedLogVideo" class="text-sm font-semibold text-gray-700">Select video log</label>
-                <select id="savedLogVideo" class="saved-log-select">
-                    <option value="coin_001.mp4">COIN_001: Making Coffee</option>
-                    <option value="coin_002.mp4">COIN_002: Assembling a Bicycle</option>
-                    <option value="coin_003.mp4">COIN_003: Cooking Pasta</option>
-                    <option value="coin_004.mp4">COIN_004: Planting a Tree</option>
-                </select>
+                <div class="saved-log-controls">
+                    <select id="savedLogVideo" class="saved-log-select">
+                        <option value="">Loading saved logs...</option>
+                    </select>
+                    <button id="deleteSavedLog" class="saved-log-delete" type="button" disabled>Delete</button>
+                </div>
             </div>
 
             <div class="saved-log-container" id="savedLogContainer"></div>
@@ -110,71 +140,153 @@
     </main>
 
     <script>
-        const savedLogs = {
-            'coin_001.mp4': [
-                '[8:38:19 PM] Started processing: coin_001.mp4',
-                '[8:38:19 PM] Sampled frame #1 (fixed rate)',
-                '[8:38:19 PM] Encoded frame #1 -> embedding: emb_1_bc8898',
-                '[8:38:20 PM] Sampled frame #2 (fixed rate)',
-                '[8:38:20 PM] Encoded frame #2 -> embedding: emb_2_2d65ec',
-                '[8:38:21 PM] Sampled frame #3 (fixed rate)',
-                '[8:38:21 PM] Encoded frame #3 -> embedding: emb_3_49d201',
-                '[8:38:22 PM] Sampled frame #4 (fixed rate)',
-                '[8:38:22 PM] Encoded frame #4 -> embedding: emb_4_2281ca',
-                '[8:38:23 PM] Streaming stopped by user',
-                '[8:38:42 PM] User question: how is the coffee made?',
-                '[8:38:42 PM] Generated answer with timestamp evidence'
-            ],
-            'coin_002.mp4': [
-                '[9:02:11 PM] Started processing: coin_002.mp4',
-                '[9:02:11 PM] Sampled frame #1 (fixed rate)',
-                '[9:02:11 PM] Encoded frame #1 -> embedding: emb_1_a8f341',
-                '[9:02:12 PM] Sampled frame #2 (fixed rate)',
-                '[9:02:12 PM] Encoded frame #2 -> embedding: emb_2_5ce118',
-                '[9:02:14 PM] New event detected: [1 -> 5] (time window)',
-                '[9:02:19 PM] Memory updated: Kept important events | Merged low-relevance events',
-                '[9:02:23 PM] Streaming stopped by user',
-                '[9:02:39 PM] User question: what part was assembled first?',
-                '[9:02:39 PM] Generated answer with timestamp evidence'
-            ],
-            'coin_003.mp4': [
-                '[7:14:03 PM] Started processing: coin_003.mp4',
-                '[7:14:03 PM] Sampled frame #1 (fixed rate)',
-                '[7:14:03 PM] Encoded frame #1 -> embedding: emb_1_d1f402',
-                '[7:14:05 PM] Forecasted query types: What (action), When (timing), How (steps)',
-                '[7:14:08 PM] New event detected: [1 -> 5] (time window)',
-                '[7:14:10 PM] Streaming stopped by user',
-                '[7:14:26 PM] User question: when was the pasta added to the pot?',
-                '[7:14:26 PM] Generated answer with timestamp evidence'
-            ],
-            'coin_004.mp4': [
-                '[6:51:44 PM] Started processing: coin_004.mp4',
-                '[6:51:44 PM] Sampled frame #1 (fixed rate)',
-                '[6:51:44 PM] Encoded frame #1 -> embedding: emb_1_91de77',
-                '[6:51:46 PM] Sampled frame #2 (fixed rate)',
-                '[6:51:46 PM] Encoded frame #2 -> embedding: emb_2_3410aa',
-                '[6:51:49 PM] New event detected: [1 -> 5] (time window)',
-                '[6:51:53 PM] Streaming stopped by user',
-                '[6:52:07 PM] User question: how deep was the hole prepared?',
-                '[6:52:07 PM] Generated answer with timestamp evidence'
-            ]
-        };
-
+        const API_BASE = window.location.origin;
         const savedLogVideo = document.getElementById('savedLogVideo');
         const savedLogContainer = document.getElementById('savedLogContainer');
+        const deleteSavedLog = document.getElementById('deleteSavedLog');
+        let savedBookmarks = [];
 
-        function renderSavedLog(video) {
-            const entries = savedLogs[video] || [];
-            savedLogContainer.innerHTML = entries
-                .map(entry => `<div class="saved-log-entry">${entry}</div>`)
-                .join('');
+        document.addEventListener('DOMContentLoaded', async () => {
+            const user = await requireLogin();
+            if (user) {
+                loadSavedLogs();
+            }
+        });
+
+        async function requireLogin() {
+            try {
+                const res = await fetch(`${API_BASE}/api/me`);
+                if (!res.ok) {
+                    window.location.href = 'login.html';
+                    return null;
+                }
+
+                const data = await res.json();
+                return data.user;
+            } catch (err) {
+                console.error(err);
+                window.location.href = 'login.html';
+                return null;
+            }
+        }
+
+        async function loadSavedLogs() {
+            try {
+                const res = await fetch(`${API_BASE}/api/bookmarks`);
+                if (res.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+
+                if (!res.ok) {
+                    throw new Error(`Failed to load bookmarks: ${res.status}`);
+                }
+
+                const data = await res.json();
+                savedBookmarks = data.bookmarks || [];
+                renderBookmarkOptions();
+            } catch (err) {
+                console.error(err);
+                renderMessage('Unable to load saved logs.');
+            }
+        }
+
+        function renderBookmarkOptions() {
+            savedLogVideo.innerHTML = '';
+
+            if (!savedBookmarks.length) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'No saved logs yet';
+                savedLogVideo.appendChild(option);
+                savedLogVideo.disabled = true;
+                deleteSavedLog.disabled = true;
+                renderMessage('No saved bookmarks yet.');
+                return;
+            }
+
+            savedBookmarks.forEach((bookmark, index) => {
+                const option = document.createElement('option');
+                option.value = bookmark.id;
+                option.textContent = bookmarkLabel(bookmark, index);
+                savedLogVideo.appendChild(option);
+            });
+
+            savedLogVideo.disabled = false;
+            deleteSavedLog.disabled = false;
+            renderSelectedLog();
+        }
+
+        function bookmarkLabel(bookmark, index) {
+            const title = bookmark.video_title || bookmark.video_id || `Saved log ${index + 1}`;
+            const created = new Date(`${bookmark.created_at}Z`);
+            const dateText = Number.isNaN(created.getTime())
+                ? bookmark.created_at
+                : created.toLocaleString();
+
+            return `${title} - ${dateText}`;
+        }
+
+        function renderSelectedLog() {
+            const bookmark = savedBookmarks.find(item => String(item.id) === savedLogVideo.value);
+
+            if (!bookmark) {
+                renderMessage('Select a saved log to view it.');
+                return;
+            }
+
+            savedLogContainer.innerHTML = '';
+            const entries = bookmark.log_text.split('\n').filter(Boolean);
+
+            entries.forEach(entryText => {
+                const entry = document.createElement('div');
+                entry.className = 'saved-log-entry';
+                entry.textContent = entryText;
+                savedLogContainer.appendChild(entry);
+            });
         }
 
         savedLogVideo.addEventListener('change', event => {
-            renderSavedLog(event.target.value);
+            renderSelectedLog(event.target.value);
         });
 
-        renderSavedLog(savedLogVideo.value);
+        deleteSavedLog.addEventListener('click', async () => {
+            const bookmarkId = savedLogVideo.value;
+            if (!bookmarkId) return;
+
+            const confirmed = confirm('Delete this saved log?');
+            if (!confirmed) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmarkId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `Delete failed with status ${res.status}`);
+                }
+
+                savedBookmarks = savedBookmarks.filter(item => String(item.id) !== bookmarkId);
+                renderBookmarkOptions();
+            } catch (err) {
+                console.error(err);
+                alert(`Failed to delete saved log: ${err.message}`);
+            }
+        });
+
+        function renderMessage(text) {
+            savedLogContainer.innerHTML = '';
+            const message = document.createElement('div');
+            message.className = 'saved-log-empty';
+            message.textContent = text;
+            savedLogContainer.appendChild(message);
+        }
     </script>
 </body>
 </html>

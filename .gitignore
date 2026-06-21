@@ -13,3 +13,6 @@ Desktop.ini
 # Python cache
 __pycache__/
 *.pyc
+
+# Local database files
+*.sqlite3

@@ -90,13 +90,24 @@
             color: #1a73e8;
             text-decoration: none;
         }
+
+        .form-message {
+            display: none;
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            border-radius: 4px;
+            background: #fee2e2;
+            color: #991b1b;
+            font-size: 0.95rem;
+        }
     </style>
 </head>
 <body>
     <div class="signup-container">
         <a href="index.html" class="close-link">&times;</a>
         <h1>Sign Up</h1>
-        <form id="signup-form" action="main.html" method="GET">
+        <p class="form-message" id="form-message"></p>
+        <form id="signup-form" action="/signup" method="POST">
             <div class="input-group">
                 <label>Username</label>
                 <input type="text" id="username" name="username" required>
@@ -117,6 +128,19 @@
     </div>
 
     <script>
+        const messages = {
+            missing: 'Please fill in all fields.',
+            mismatch: 'Password and Confirm Password must match.',
+            exists: 'That username is already taken.'
+        };
+        const error = new URLSearchParams(window.location.search).get('error');
+        const message = document.getElementById('form-message');
+
+        if (messages[error]) {
+            message.textContent = messages[error];
+            message.style.display = 'block';
+        }
+
         document.getElementById('signup-form').addEventListener('submit', function (event) {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
@@ -136,3 +160,4 @@
     </script>
 </body>
 </html>
+

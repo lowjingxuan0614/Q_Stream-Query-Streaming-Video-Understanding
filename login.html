@@ -90,13 +90,24 @@
             color: #1a73e8;
             text-decoration: none;
         }
+
+        .form-message {
+            display: none;
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            border-radius: 4px;
+            background: #fee2e2;
+            color: #991b1b;
+            font-size: 0.95rem;
+        }
     </style>
 </head>
 <body>
     <div class="login-container">
         <a href="index.html" class="close-link">&times;</a>
         <h1>Login</h1>
-        <form action="main.html" method="GET">
+        <p class="form-message" id="form-message"></p>
+        <form action="/login" method="POST">
             <div class="input-group">
                 <label>Username</label>
                 <input type="text" name="username" required>
@@ -111,5 +122,18 @@
             <p>Don't have an account? <a href="signup.html">Sign Up</a></p>
         </div>
     </div>
+    <script>
+        const messages = {
+            invalid: 'Invalid username or password.'
+        };
+        const error = new URLSearchParams(window.location.search).get('error');
+        const message = document.getElementById('form-message');
+
+        if (messages[error]) {
+            message.textContent = messages[error];
+            message.style.display = 'block';
+        }
+    </script>
 </body>
 </html>
+
