@@ -377,17 +377,17 @@
             </select>
 
             <div class="video-controls">
-                <button class="btn btn-primary" onclick="startStreaming()">Start Stream Processing</button>
-                <button class="btn btn-secondary" onclick="stopStreaming()">Stop</button>
+                <button type="button" class="btn btn-primary" onclick="startStreaming()">Start Stream Processing</button>
+                <button type="button" class="btn btn-secondary" onclick="stopStreaming()">Stop</button>
             </div>
 
             <!-- Video Player Area -->
             <video class="video-player" id="videoPlayer" controls playsinline preload="metadata"></video>
 
             <!-- Processing Progress Bar -->
-            <div class="progress-container">
+            <!-- <div class="progress-container">
                 <div class="progress-bar" id="progressBar"></div>
-            </div>
+            </div> -->
         </div>
 
         <!-- Real-Time Log Panel -->
@@ -485,11 +485,17 @@
                 data.videos.forEach((video, index) => {
                     const option = document.createElement("option");
                     option.value = video.video_id;
-                    option.textContent = `COIN_${String(index + 1).padStart(3, "0")}: ${video.filename}`;
+
+                    const displayName = video.display_name || video.title || video.filename;
+                    option.textContent = `COIN_${String(index + 1).padStart(3, "0")}: ${displayName}`;
+
                     option.dataset.filename = video.filename;
                     option.dataset.path = video.path;
+                    option.dataset.title = video.title || "";
+                    option.dataset.displayName = displayName;
+
                     videoSelector.appendChild(option);
-                });
+            });
 
                 addLog(`Loaded ${data.count} COIN dataset videos from AutoDL`, "log-frame");
             } catch (err) {
@@ -506,11 +512,13 @@
             selectedVideoInfo = selectedVideoId ? {
                 video_id: selectedVideoId,
                 filename: option.dataset.filename,
+                title: option.dataset.title || option.dataset.filename,
+                displayName: option.dataset.displayName || option.dataset.title || option.dataset.filename,
                 path: option.dataset.path
             } : null;
 
             if (selectedVideoInfo) {
-                addLog(`Selected dataset video: ${selectedVideoInfo.filename}`, "log-frame");
+                addLog(`Selected dataset video: ${selectedVideoInfo.displayName}`, "log-frame");
 
                 // Load the real video from AutoDL backend into the player.
                 videoPlayer.src = `${AI_BASE}/coin_videos/${encodeURIComponent(selectedVideoInfo.filename)}`;
@@ -529,15 +537,16 @@
             currentJobId = null;
             lastBackendMessage = "";
             renderedLogIndex = 0;
-            progressBar.style.width = "0%";
+            updateProgress(0);
             clearLog();
 
-            addLog(`Selected video: ${selectedVideoInfo.filename}`, "log-frame");
+            addLog(`Selected video: ${selectedVideoInfo.displayName}`, "log-frame");
             addLog(`Video ID: ${selectedVideoId}`, "log-frame");
 
             videoPlayer.play().catch(() => {});
 
             try {
+                addLog(`Sending request to AI backend: ${AI_BASE}/process`, "log-event");
                 const res = await fetch(`${AI_BASE}/process`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -590,6 +599,7 @@
         }
 
         function updateProgress(percent) {
+            if (!progressBar) return;
             progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
         }
 
@@ -610,7 +620,7 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         video_id: selectedVideoId || null,
-                        video_title: selectedVideoInfo?.filename || "Unsaved video log",
+                        video_title: selectedVideoInfo?.displayName || selectedVideoInfo?.filename || "Unsaved video log",
                         log_text: logs
                     })
                 });
@@ -762,8 +772,16 @@
                 addLog(`Generated answer using ${data.num_events_used}/${data.total_events} event descriptions`, 'log-answer');
             } catch (err) {
                 console.error(err);
-                document.getElementById('answerDisplay').textContent = "Failed to retrieve answer from backend.";
-                addLog(`Q&A failed: ${err.message}`, 'log-answer');
+                const msg = String(err.message || "");
+                if (msg.includes("events_with_descriptions.json not found") || msg.includes("Run /process first") || msg.includes("404")) {
+                    document.getElementById('answerDisplay').textContent =
+                        "Event descriptions are still being generated. Please wait until processing completes before asking.";
+                    addLog("Q&A waiting: evidence file is not ready yet.", "log-answer");
+                } else {
+                    document.getElementById('answerDisplay').textContent =
+                        "Unable to retrieve an answer from the backend. Please check the backend log.";
+                    addLog(`Q&A failed: ${msg}`, 'log-answer');
+                }
             }
         }
     </script>

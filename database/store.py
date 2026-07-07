@@ -195,3 +195,33 @@ def delete_bookmark(user_id: int, bookmark_id: int) -> bool:
             (bookmark_id, user_id),
         )
     return cursor.rowcount > 0
+
+
+def update_bookmark_log_text(
+    user_id: int,
+    bookmark_id: int,
+    log_text: str,
+) -> dict[str, Any] | None:
+    with connect() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE bookmarks
+            SET log_text = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (log_text, bookmark_id, user_id),
+        )
+
+        if cursor.rowcount == 0:
+            return None
+
+        row = connection.execute(
+            """
+            SELECT id, video_id, video_title, log_text, created_at
+            FROM bookmarks
+            WHERE id = ? AND user_id = ?
+            """,
+            (bookmark_id, user_id),
+        ).fetchone()
+
+    return dict(row) if row else None

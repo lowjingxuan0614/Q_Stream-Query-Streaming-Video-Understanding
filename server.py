@@ -20,6 +20,7 @@ from database.store import (
     list_bookmarks,
     authenticate_user,
     SESSION_SECONDS,
+    update_bookmark_log_text,
 )
 
 
@@ -77,6 +78,19 @@ class AppHandler(SimpleHTTPRequestHandler):
 
         if path == "/api/bookmarks":
             self.handle_create_bookmark()
+            return
+
+        if path.startswith("/api/bookmarks/"):
+            self.handle_update_bookmark_log(path)
+            return
+
+        self.send_json({"error": "Not found."}, HTTPStatus.NOT_FOUND)
+
+    def do_PATCH(self) -> None:
+        path = urlparse(self.path).path
+
+        if path.startswith("/api/bookmarks/"):
+            self.handle_update_bookmark_log(path)
             return
 
         self.send_json({"error": "Not found."}, HTTPStatus.NOT_FOUND)
@@ -160,6 +174,33 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
 
         self.send_json({"bookmark": bookmark}, HTTPStatus.CREATED)
+
+    def handle_update_bookmark_log(self, path: str) -> None:
+        user = self.require_user()
+        if not user:
+            return
+
+        try:
+            bookmark_id = int(path.rsplit("/", 1)[1])
+        except ValueError:
+            self.send_json({"error": "Invalid bookmark id."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        data = self.read_request_data()
+        if "log_text" not in data:
+            self.send_json({"error": "Log text is required."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        bookmark = update_bookmark_log_text(
+            user_id=user["id"],
+            bookmark_id=bookmark_id,
+            log_text=data.get("log_text", ""),
+        )
+        if not bookmark:
+            self.send_json({"error": "Bookmark not found."}, HTTPStatus.NOT_FOUND)
+            return
+
+        self.send_json({"bookmark": bookmark})
 
     def read_request_data(self) -> dict:
         length = int(self.headers.get("Content-Length", 0) or 0)

@@ -59,6 +59,21 @@
             flex-wrap: wrap;
         }
 
+        .saved-log-status {
+            min-height: 20px;
+            margin: -8px 0 16px;
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        .saved-log-status.success {
+            color: #047857;
+        }
+
+        .saved-log-status.error {
+            color: #b91c1c;
+        }
+
         .saved-log-delete {
             padding: 12px 14px;
             border: 1px solid #fecaca;
@@ -68,6 +83,16 @@
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .saved-log-delete:not(:disabled):hover {
+            background: #fee2e2;
+            border-color: #fca5a5;
         }
 
         .saved-log-delete:disabled {
@@ -91,10 +116,45 @@
             font-size: 14px;
             line-height: 1.5;
             margin-bottom: 10px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            justify-content: space-between;
         }
 
         .saved-log-entry:last-child {
             margin-bottom: 0;
+        }
+
+        .saved-log-entry-text {
+            flex: 1;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .saved-log-entry-remove {
+            width: 36px;
+            height: 36px;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            background: #fef2f2;
+            color: #991b1b;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .saved-log-entry-remove:not(:disabled):hover {
+            background: #fee2e2;
+            border-color: #fca5a5;
+        }
+
+        .saved-log-entry-remove:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
         }
 
         .saved-log-empty {
@@ -130,10 +190,14 @@
                     <select id="savedLogVideo" class="saved-log-select">
                         <option value="">Loading saved logs...</option>
                     </select>
-                    <button id="deleteSavedLog" class="saved-log-delete" type="button" disabled>Delete</button>
+                    <button id="deleteSavedLog" class="saved-log-delete" type="button" disabled>
+                        <i class="fas fa-trash" aria-hidden="true"></i>
+                        <span>Delete log</span>
+                    </button>
                 </div>
             </div>
 
+            <p class="saved-log-status" id="savedLogStatus" aria-live="polite"></p>
             <div class="saved-log-container" id="savedLogContainer"></div>
             </div>
         </div>
@@ -143,8 +207,11 @@
         const API_BASE = window.location.origin;
         const savedLogVideo = document.getElementById('savedLogVideo');
         const savedLogContainer = document.getElementById('savedLogContainer');
+        const savedLogStatus = document.getElementById('savedLogStatus');
         const deleteSavedLog = document.getElementById('deleteSavedLog');
         let savedBookmarks = [];
+        let isRemovingEntry = false;
+        let isDeletingLog = false;
 
         document.addEventListener('DOMContentLoaded', async () => {
             const user = await requireLogin();
@@ -187,11 +254,12 @@
                 renderBookmarkOptions();
             } catch (err) {
                 console.error(err);
+                renderStatus('Unable to load saved logs.', 'error');
                 renderMessage('Unable to load saved logs.');
             }
         }
 
-        function renderBookmarkOptions() {
+        function renderBookmarkOptions(selectedBookmarkId = '') {
             savedLogVideo.innerHTML = '';
 
             if (!savedBookmarks.length) {
@@ -214,6 +282,9 @@
 
             savedLogVideo.disabled = false;
             deleteSavedLog.disabled = false;
+            if (selectedBookmarkId) {
+                savedLogVideo.value = selectedBookmarkId;
+            }
             renderSelectedLog();
         }
 
@@ -228,7 +299,7 @@
         }
 
         function renderSelectedLog() {
-            const bookmark = savedBookmarks.find(item => String(item.id) === savedLogVideo.value);
+            const bookmark = selectedBookmark();
 
             if (!bookmark) {
                 renderMessage('Select a saved log to view it.');
@@ -236,29 +307,58 @@
             }
 
             savedLogContainer.innerHTML = '';
-            const entries = bookmark.log_text.split('\n').filter(Boolean);
+            const entries = bookmarkEntries(bookmark);
 
-            entries.forEach(entryText => {
+            if (!entries.length) {
+                renderMessage('This saved log has no entries.');
+                return;
+            }
+
+            entries.forEach((entryText, index) => {
                 const entry = document.createElement('div');
                 entry.className = 'saved-log-entry';
-                entry.textContent = entryText;
+
+                const text = document.createElement('div');
+                text.className = 'saved-log-entry-text';
+                text.textContent = entryText;
+
+                const removeButton = document.createElement('button');
+                removeButton.className = 'saved-log-entry-remove';
+                removeButton.type = 'button';
+                removeButton.title = 'Remove this log entry';
+                removeButton.setAttribute('aria-label', 'Remove this log entry');
+                removeButton.disabled = isRemovingEntry;
+                removeButton.innerHTML = '<i class="fas fa-trash" aria-hidden="true"></i>';
+                removeButton.addEventListener('click', () => removeLogEntry(index));
+
+                entry.appendChild(text);
+                entry.appendChild(removeButton);
                 savedLogContainer.appendChild(entry);
             });
         }
 
         savedLogVideo.addEventListener('change', event => {
+            renderStatus('');
             renderSelectedLog(event.target.value);
         });
 
         deleteSavedLog.addEventListener('click', async () => {
-            const bookmarkId = savedLogVideo.value;
-            if (!bookmarkId) return;
+            if (isDeletingLog || isRemovingEntry) return;
 
-            const confirmed = confirm('Delete this saved log?');
+            const bookmark = selectedBookmark();
+            if (!bookmark) return;
+
+            const label = bookmark.video_title || bookmark.video_id || 'this saved log';
+            const confirmed = confirm(`Delete "${label}"? This removes the whole saved log.`);
             if (!confirmed) return;
 
+            const bookmarkId = String(bookmark.id);
+            const previousIndex = savedBookmarks.findIndex(item => String(item.id) === bookmarkId);
+            setDeletingLog(true);
+            renderStatus('');
+
             try {
-                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmarkId}`, {
+                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmark.id}`, {
                     method: 'DELETE'
                 });
 
@@ -273,12 +373,108 @@
                 }
 
                 savedBookmarks = savedBookmarks.filter(item => String(item.id) !== bookmarkId);
-                renderBookmarkOptions();
+                const nextBookmark = savedBookmarks[Math.min(previousIndex, savedBookmarks.length - 1)];
+                renderBookmarkOptions(nextBookmark ? String(nextBookmark.id) : '');
+                renderStatus('Saved log deleted.', 'success');
             } catch (err) {
                 console.error(err);
-                alert(`Failed to delete saved log: ${err.message}`);
+                renderStatus(`Failed to delete saved log: ${err.message}`, 'error');
+            } finally {
+                setDeletingLog(false);
             }
         });
+
+        async function removeLogEntry(entryIndex) {
+            if (isRemovingEntry || isDeletingLog) return;
+
+            const bookmark = selectedBookmark();
+            if (!bookmark) return;
+
+            const entries = bookmarkEntries(bookmark);
+            const entryText = entries[entryIndex];
+            if (!entryText) return;
+
+            const confirmed = confirm('Remove this log entry?');
+            if (!confirmed) return;
+
+            const nextEntries = entries.filter((_, index) => index !== entryIndex);
+            setRemovingEntry(true);
+            renderStatus('');
+
+            try {
+                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmark.id}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        log_text: nextEntries.join('\n')
+                    })
+                });
+
+                if (res.status === 401) {
+                    window.location.href = 'login.html';
+                    return;
+                }
+
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `Update failed with status ${res.status}`);
+                }
+
+                const data = await res.json();
+                savedBookmarks = savedBookmarks.map(item =>
+                    item.id === data.bookmark.id ? data.bookmark : item
+                );
+                renderBookmarkOptions(String(data.bookmark.id));
+                renderStatus('Log entry removed.', 'success');
+            } catch (err) {
+                console.error(err);
+                renderStatus(`Failed to remove log entry: ${err.message}`, 'error');
+            } finally {
+                setRemovingEntry(false);
+            }
+        }
+
+        function selectedBookmark() {
+            return savedBookmarks.find(item => String(item.id) === savedLogVideo.value);
+        }
+
+        function bookmarkEntries(bookmark) {
+            return (bookmark.log_text || '')
+                .split('\n')
+                .filter(entry => entry.trim() !== '');
+        }
+
+        function setRemovingEntry(isRemoving) {
+            isRemovingEntry = isRemoving;
+            savedLogVideo.disabled = isRemoving || !savedBookmarks.length;
+            deleteSavedLog.disabled = isRemoving || !savedBookmarks.length;
+            savedLogContainer
+                .querySelectorAll('.saved-log-entry-remove')
+                .forEach(button => {
+                    button.disabled = isRemoving;
+                });
+        }
+
+        function setDeletingLog(isDeleting) {
+            isDeletingLog = isDeleting;
+            savedLogVideo.disabled = isDeleting || !savedBookmarks.length;
+            deleteSavedLog.disabled = isDeleting || !savedBookmarks.length;
+            deleteSavedLog.querySelector('span').textContent = isDeleting
+                ? 'Deleting...'
+                : 'Delete selected log';
+            savedLogContainer
+                .querySelectorAll('.saved-log-entry-remove')
+                .forEach(button => {
+                    button.disabled = isDeleting;
+                });
+        }
+
+        function renderStatus(text, type = '') {
+            savedLogStatus.className = `saved-log-status ${type}`.trim();
+            savedLogStatus.textContent = text;
+        }
 
         function renderMessage(text) {
             savedLogContainer.innerHTML = '';
