@@ -431,15 +431,21 @@
         const AI_BASE = "http://localhost:8000";
 
         let isStreaming = false;
-        let frameCount = 0;
         let selectedVideoId = "";
         let selectedVideoInfo = null;
-        let currentJobId = null;
+        let currentStreamId = null;
+        let streamStepTimer = null;
         let statusPollTimer = null;
-        let pipelineTimer = null;
-        let lastBackendMessage = "";
         let renderedLogIndex = 0;
         let currentUser = null;
+        let stepInFlight = false;
+        let lastStepTime = 0;
+        let lastCompletedEventCount = 0;
+
+        const MODEL_NAME = "qwen2.5vl:7b";
+        const SAMPLE_FPS = 1.0;
+        const STEP_INTERVAL_MS = 1000;
+        const STATUS_INTERVAL_MS = 1500;
 
         let logContainer = document.getElementById('logContainer');
         let progressBar = document.getElementById('progressBar');
@@ -495,7 +501,7 @@
                     option.dataset.displayName = displayName;
 
                     videoSelector.appendChild(option);
-            });
+                });
 
                 addLog(`Loaded ${data.count} COIN dataset videos from AutoDL`, "log-frame");
             } catch (err) {
@@ -517,13 +523,27 @@
                 path: option.dataset.path
             } : null;
 
+            resetStreamState();
+
             if (selectedVideoInfo) {
                 addLog(`Selected dataset video: ${selectedVideoInfo.displayName}`, "log-frame");
-
-                // Load the real video from AutoDL backend into the player.
                 videoPlayer.src = `${AI_BASE}/coin_videos/${encodeURIComponent(selectedVideoInfo.filename)}`;
                 videoPlayer.load();
             }
+        });
+
+        videoPlayer.addEventListener("play", () => {
+            if (isStreaming && currentStreamId) {
+                startStreamStepLoop();
+            }
+        });
+
+        videoPlayer.addEventListener("pause", () => {
+            stopStreamStepLoop();
+        });
+
+        videoPlayer.addEventListener("ended", async () => {
+            await stopStreaming(true);
         });
 
         async function startStreaming() {
@@ -532,29 +552,26 @@
                 return;
             }
 
-            isStreaming = true;
-            frameCount = 0;
-            currentJobId = null;
-            lastBackendMessage = "";
-            renderedLogIndex = 0;
-            updateProgress(0);
+            await stopExistingStreamQuietly();
+            resetStreamState();
             clearLog();
+            updateProgress(0);
 
             addLog(`Selected video: ${selectedVideoInfo.displayName}`, "log-frame");
             addLog(`Video ID: ${selectedVideoId}`, "log-frame");
-
-            videoPlayer.play().catch(() => {});
+            addLog(`Starting true streaming mode: ${AI_BASE}/start_stream`, "log-memory");
 
             try {
-                addLog(`Sending request to AI backend: ${AI_BASE}/process`, "log-event");
-                const res = await fetch(`${AI_BASE}/process`, {
+                const res = await fetch(`${AI_BASE}/start_stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         video_id: selectedVideoId,
-                        model: "qwen2.5vl:7b",
+                        model: MODEL_NAME,
+                        sample_fps: SAMPLE_FPS,
                         force: true,
-                        force_description: true
+                        similarity_threshold: 0.75,
+                        max_event_length: 5.0
                     })
                 });
 
@@ -564,26 +581,205 @@
                 }
 
                 const data = await res.json();
-                currentJobId = data.job_id;
-                addLog(`Backend job started: ${currentJobId}`, "log-event");
-                updateProgress(10);
-                pollJobStatus(currentJobId);
+                currentStreamId = data.stream_id;
+                isStreaming = true;
+
+                addLog(`Stream initialized: ${currentStreamId}`, "log-event");
+                addLog("Backend will only process frames up to the current video playback time.", "log-memory");
+
+                updateProgress(5);
+                pollStreamStatus();
+
+                videoPlayer.currentTime = 0;
+                await videoPlayer.play().catch(() => {
+                    addLog("Video autoplay was blocked. Press play on the video to continue streaming steps.", "log-frame");
+                });
+
+                startStreamStepLoop();
             } catch (err) {
                 console.error(err);
-                addLog(`Failed to start backend processing: ${err.message}`, "log-answer");
+                addLog(`Failed to start streaming backend: ${err.message}`, "log-answer");
                 isStreaming = false;
+                currentStreamId = null;
             }
         }
 
-        function stopStreaming() {
+        async function stopStreaming(fromEnded = false) {
+            stopStreamStepLoop();
+            stopStatusPolling();
+
+            if (!fromEnded) {
+                videoPlayer.pause();
+            }
+
+            if (!currentStreamId) {
+                isStreaming = false;
+                addLog("Streaming stopped by user", "log-frame");
+                return;
+            }
+
+            const streamToStop = currentStreamId;
             isStreaming = false;
-            videoPlayer.pause();
+
+            try {
+                addLog(`Stopping stream: ${AI_BASE}/stop_stream`, "log-event");
+                const res = await fetch(`${AI_BASE}/stop_stream`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        stream_id: streamToStop,
+                        model: MODEL_NAME,
+                        describe_final_event: true
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+                addLog(`Stream ended. Total completed events: ${data.total_completed_events}`, "log-memory");
+                updateProgress(100);
+            } catch (err) {
+                console.error(err);
+                addLog(`Failed to stop stream cleanly: ${err.message}`, "log-answer");
+            }
+        }
+
+        async function stopExistingStreamQuietly() {
+            if (!currentStreamId) return;
+            try {
+                await fetch(`${AI_BASE}/stop_stream`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        stream_id: currentStreamId,
+                        model: MODEL_NAME,
+                        describe_final_event: false
+                    })
+                });
+            } catch (err) {
+                console.warn("Previous stream could not be stopped:", err);
+            }
+        }
+
+        function resetStreamState() {
+            isStreaming = false;
+            currentStreamId = null;
+            renderedLogIndex = 0;
+            stepInFlight = false;
+            lastStepTime = 0;
+            lastCompletedEventCount = 0;
+            stopStreamStepLoop();
+            stopStatusPolling();
+            document.getElementById('answerDisplay').textContent = "Ask a question to retrieve evidence-grounded answer...";
+            document.getElementById('evidenceDisplay').style.display = "none";
+        }
+
+        function startStreamStepLoop() {
+            if (streamStepTimer || !isStreaming || !currentStreamId) return;
+
+            processCurrentVideoTime();
+            streamStepTimer = setInterval(processCurrentVideoTime, STEP_INTERVAL_MS);
+        }
+
+        function stopStreamStepLoop() {
+            if (streamStepTimer) {
+                clearInterval(streamStepTimer);
+                streamStepTimer = null;
+            }
+        }
+
+        async function processCurrentVideoTime() {
+            if (!isStreaming || !currentStreamId || videoPlayer.paused || videoPlayer.ended) return;
+            if (stepInFlight) return;
+
+            const currentTime = Number(videoPlayer.currentTime || 0);
+
+            // Avoid sending duplicate requests when the browser has not advanced enough.
+            if (currentTime <= lastStepTime && lastStepTime !== 0) return;
+
+            stepInFlight = true;
+            try {
+                const res = await fetch(`${AI_BASE}/stream_step`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        stream_id: currentStreamId,
+                        current_time: currentTime,
+                        model: MODEL_NAME,
+                        describe_closed_events: true
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+                lastStepTime = currentTime;
+
+                if (data.new_frame_count > 0 || data.closed_event_count > 0) {
+                    addLog(
+                        `Stream step at ${currentTime.toFixed(2)}s: new_frames=${data.new_frame_count}, closed_events=${data.closed_event_count}, described_events=${data.described_event_count}`,
+                        "log-frame"
+                    );
+                }
+
+                if (data.total_completed_events !== lastCompletedEventCount) {
+                    lastCompletedEventCount = data.total_completed_events;
+                    addLog(`Available evidence events so far: ${lastCompletedEventCount}`, "log-memory");
+                }
+
+                updateStreamingProgress(currentTime);
+            } catch (err) {
+                console.error(err);
+                addLog(`Streaming step failed: ${err.message}`, "log-answer");
+            } finally {
+                stepInFlight = false;
+            }
+        }
+
+        async function pollStreamStatus() {
+            if (!isStreaming || !currentStreamId) return;
+
+            try {
+                const res = await fetch(`${AI_BASE}/stream_status/${currentStreamId}`);
+                if (!res.ok) throw new Error(`Stream status request failed: ${res.status}`);
+
+                const status = await res.json();
+                renderBackendLogs(status.logs || []);
+                updateStreamingProgress(status.current_time || videoPlayer.currentTime || 0);
+
+                if (status.status === "ended") {
+                    isStreaming = false;
+                    stopStreamStepLoop();
+                    addLog("Backend stream status: ended", "log-memory");
+                    updateProgress(100);
+                    return;
+                }
+
+                statusPollTimer = setTimeout(pollStreamStatus, STATUS_INTERVAL_MS);
+            } catch (err) {
+                console.error(err);
+                addLog(`Could not retrieve streaming status: ${err.message}`, "log-answer");
+                statusPollTimer = setTimeout(pollStreamStatus, 5000);
+            }
+        }
+
+        function stopStatusPolling() {
             if (statusPollTimer) {
                 clearTimeout(statusPollTimer);
                 statusPollTimer = null;
             }
+        }
 
-            addLog("Streaming stopped by user", "log-frame");
+        function updateStreamingProgress(currentTime) {
+            const duration = Number(videoPlayer.duration || 0);
+            if (!duration || Number.isNaN(duration)) return;
+            updateProgress((currentTime / duration) * 100);
         }
 
         function addLog(message, type) {
@@ -601,6 +797,19 @@
         function updateProgress(percent) {
             if (!progressBar) return;
             progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+        }
+
+        function renderBackendLogs(logs) {
+            for (let i = renderedLogIndex; i < logs.length; i++) {
+                const item = logs[i];
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${item.type || "log-frame"}`;
+                entry.textContent = `[${item.time || new Date().toLocaleTimeString()}] ${item.message}`;
+                logContainer.appendChild(entry);
+            }
+
+            renderedLogIndex = logs.length;
+            logContainer.scrollTop = logContainer.scrollHeight;
         }
 
         async function saveLog() {
@@ -646,88 +855,6 @@
             saveLogNotice.classList.remove('show');
         }
 
-        async function pollJobStatus(jobId) {
-            if (!isStreaming) return;
-
-            try {
-                const res = await fetch(`${AI_BASE}/status/${jobId}`);
-                if (!res.ok) throw new Error(`Status request failed: ${res.status}`);
-
-                const status = await res.json();
-
-                renderBackendLogs(status.logs || []);
-
-                if (status.message && status.message !== lastBackendMessage) {
-                    lastBackendMessage = status.message;
-                    updateProgressFromBackendStatus(status.message, status.status);
-                }
-
-                if (status.status === "done") {
-                    isStreaming = false;
-                    updateProgress(100);
-                    addLog("Processing completed. events_with_descriptions.json is ready.", "log-memory");
-                    return;
-                }
-
-                if (status.status === "failed") {
-                    isStreaming = false;
-                    addLog(`Backend processing failed: ${status.message}`, "log-answer");
-                    return;
-                }
-
-                statusPollTimer = setTimeout(() => pollJobStatus(jobId), 3000);
-            } catch (err) {
-                console.error(err);
-                addLog(`Could not retrieve backend status: ${err.message}`, "log-answer");
-                statusPollTimer = setTimeout(() => pollJobStatus(jobId), 5000);
-            }
-        }
-
-        function renderBackendLogs(logs) {
-            for (let i = renderedLogIndex; i < logs.length; i++) {
-                const item = logs[i];
-                const entry = document.createElement('div');
-                entry.className = `log-entry ${item.type || "log-frame"}`;
-                entry.textContent = `[${item.time || new Date().toLocaleTimeString()}] ${item.message}`;
-                logContainer.appendChild(entry);
-            }
-
-            renderedLogIndex = logs.length;
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        function addBackendStatusLog(message) {
-            const lower = message.toLowerCase();
-
-            if (lower.includes("resolving")) {
-                addLog(`Backend: ${message}`, "log-frame");
-            } else if (lower.includes("pipeline") || lower.includes("4.2") || lower.includes("4.4")) {
-                addLog(`Backend: ${message}`, "log-encode");
-            } else if (lower.includes("description")) {
-                addLog(`Backend: ${message}`, "log-query");
-            } else if (lower.includes("done") || lower.includes("finished")) {
-                addLog(`Backend: ${message}`, "log-memory");
-            } else {
-                addLog(`Backend: ${message}`, "log-event");
-            }
-        }
-
-        function updateProgressFromBackendStatus(message, status) {
-            const lower = message.toLowerCase();
-
-            if (status === "done") {
-                updateProgress(100);
-            } else if (lower.includes("resolving")) {
-                updateProgress(15);
-            } else if (lower.includes("4.2") || lower.includes("4.4") || lower.includes("pipeline")) {
-                updateProgress(45);
-            } else if (lower.includes("description")) {
-                updateProgress(75);
-            } else if (status === "running") {
-                updateProgress(30);
-            }
-        }
-
         async function submitQuestion() {
             const question = document.getElementById('userQuery').value.trim();
 
@@ -741,18 +868,28 @@
                 return;
             }
 
+            if (!currentStreamId) {
+                alert("Please click Start Stream Processing first.");
+                return;
+            }
+
+            // Process up to the exact current video time before answering.
+            await processCurrentVideoTime();
+
             addLog(`User question: ${question}`, 'log-answer');
-            document.getElementById('answerDisplay').textContent = "Retrieving evidence-grounded answer from AutoDL backend...";
+            document.getElementById('answerDisplay').textContent = "Retrieving answer from current streaming memory only...";
             document.getElementById('evidenceDisplay').style.display = "none";
 
             try {
-                const res = await fetch(`${AI_BASE}/ask`, {
+                const res = await fetch(`${AI_BASE}/ask_stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        video_id: selectedVideoId,
+                        stream_id: currentStreamId,
                         question: question,
-                        model: "qwen2.5vl:7b"
+                        model: MODEL_NAME,
+                        max_events: 120,
+                        include_open_event: false
                     })
                 });
 
@@ -766,24 +903,19 @@
                 document.getElementById('answerDisplay').textContent = data.answer;
 
                 const evidenceEl = document.getElementById('evidenceDisplay');
-                evidenceEl.textContent = `Evidence source: ${data.num_events_used}/${data.total_events} event descriptions from events_with_descriptions.json`;
+                evidenceEl.textContent = `Streaming evidence used: ${data.num_events_used}/${data.total_events} currently available event descriptions. Current video time: ${videoPlayer.currentTime.toFixed(2)}s`;
                 evidenceEl.style.display = "block";
 
-                addLog(`Generated answer using ${data.num_events_used}/${data.total_events} event descriptions`, 'log-answer');
+                addLog(`Generated answer using ${data.num_events_used}/${data.total_events} streaming event descriptions`, 'log-answer');
             } catch (err) {
                 console.error(err);
                 const msg = String(err.message || "");
-                if (msg.includes("events_with_descriptions.json not found") || msg.includes("Run /process first") || msg.includes("404")) {
-                    document.getElementById('answerDisplay').textContent =
-                        "Event descriptions are still being generated. Please wait until processing completes before asking.";
-                    addLog("Q&A waiting: evidence file is not ready yet.", "log-answer");
-                } else {
-                    document.getElementById('answerDisplay').textContent =
-                        "Unable to retrieve an answer from the backend. Please check the backend log.";
-                    addLog(`Q&A failed: ${msg}`, 'log-answer');
-                }
+                document.getElementById('answerDisplay').textContent =
+                    "Unable to retrieve an answer from the current streaming memory. Please let the video play longer or check the backend log.";
+                addLog(`Q&A failed: ${msg}`, 'log-answer');
             }
         }
     </script>
+
 </body>
 </html>
