@@ -378,6 +378,7 @@
 
             <div class="video-controls">
                 <button type="button" class="btn btn-primary" onclick="startStreaming()">Start Stream Processing</button>
+                <button type="button" class="btn btn-primary" onclick="startCameraStreaming()">📷 Camera</button>
                 <button type="button" class="btn btn-secondary" onclick="stopStreaming()">Stop</button>
             </div>
 
@@ -436,6 +437,9 @@
         let currentStreamId = null;
         let streamStepTimer = null;
         let statusPollTimer = null;
+        let cameraMediaStream = null;
+        let cameraFrameTimer = null;
+        let isCameraMode = false;
         let renderedLogIndex = 0;
         let currentUser = null;
         let stepInFlight = false;
@@ -446,6 +450,7 @@
         const SAMPLE_FPS = 1.0;
         const STEP_INTERVAL_MS = 1000;
         const STATUS_INTERVAL_MS = 1500;
+        const CAMERA_FRAME_INTERVAL_MS = 3000;
 
         let logContainer = document.getElementById('logContainer');
         let progressBar = document.getElementById('progressBar');
@@ -533,7 +538,7 @@
         });
 
         videoPlayer.addEventListener("play", () => {
-            if (isStreaming && currentStreamId) {
+            if (isStreaming && currentStreamId && !isCameraMode) {
                 startStreamStepLoop();
             }
         });
@@ -545,6 +550,149 @@
         videoPlayer.addEventListener("ended", async () => {
             await stopStreaming(true);
         });
+
+        async function startCameraStreaming() {
+            await stopExistingStreamQuietly();
+            stopCameraTracks();
+            resetStreamState();
+            clearLog();
+            updateProgress(0);
+
+            selectedVideoId = "camera";
+            selectedVideoInfo = {
+                video_id: "camera",
+                filename: "camera",
+                title: "Live Camera",
+                displayName: "Live Camera"
+            };
+
+            addLog("Requesting camera permission...", "log-frame");
+
+            try {
+                cameraMediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+
+                isCameraMode = true;
+
+                videoPlayer.srcObject = cameraMediaStream;
+                videoPlayer.removeAttribute("src");
+                videoPlayer.controls = false;
+                await videoPlayer.play();
+
+                addLog(`Starting camera streaming mode: ${AI_BASE}/start_camera_stream`, "log-memory");
+
+                const res = await fetch(`${AI_BASE}/start_camera_stream`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: MODEL_NAME,
+                        frame_interval_seconds: CAMERA_FRAME_INTERVAL_MS / 1000
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+                currentStreamId = data.stream_id;
+                isStreaming = true;
+
+                addLog(`Camera stream initialized: ${currentStreamId}`, "log-event");
+                addLog("Camera mode will send one frame to backend every 3 seconds.", "log-memory");
+
+                await sendCameraFrame();
+                cameraFrameTimer = setInterval(sendCameraFrame, CAMERA_FRAME_INTERVAL_MS);
+               // pollStreamStatus();
+            } catch (err) {
+                console.error(err);
+                addLog(`Failed to start camera backend: ${err.message}`, "log-answer");
+                stopCameraTracks();
+                isStreaming = false;
+                isCameraMode = false;
+                currentStreamId = null;
+            }
+        }
+
+        async function sendCameraFrame() {
+            if (!isStreaming || !isCameraMode || !currentStreamId || !cameraMediaStream) return;
+            if (stepInFlight) return;
+            if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) return;
+
+            stepInFlight = true;
+
+            try {
+                const canvas = document.createElement("canvas");
+                canvas.width = videoPlayer.videoWidth;
+                canvas.height = videoPlayer.videoHeight;
+
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(videoPlayer, 0, 0, canvas.width, canvas.height);
+
+                const imageData = canvas.toDataURL("image/jpeg", 0.8);
+                const timestamp = Date.now() / 1000;
+
+                const res = await fetch(`${AI_BASE}/camera_frame`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        stream_id: currentStreamId,
+                        image_data: imageData,
+                        timestamp: timestamp,
+                        model: MODEL_NAME
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText);
+                }
+
+                const data = await res.json();
+                const desc = data.event.description || "";
+
+                addLog(
+                    `Camera frame processed as Event #${data.event.event_id}: ${desc}`,
+                    "log-query"
+                );
+
+                if (data.event.model_prediction_status === "ok") {
+                    addLog(
+                        `4.5/4.6 camera prediction: query_types=${JSON.stringify(data.event.query_types_pred_45)}, memory_action=${data.event.memory_action_pred_46}`,
+                        "log-memory"
+                    );
+                }
+
+                lastCompletedEventCount = data.total_completed_events;
+                updateProgress(Math.min(95, lastCompletedEventCount * 5));
+            } catch (err) {
+                console.error(err);
+                addLog(`Camera frame processing failed: ${err.message}`, "log-answer");
+            } finally {
+                stepInFlight = false;
+            }
+        }
+
+        function stopCameraTracks() {
+            if (cameraFrameTimer) {
+                clearInterval(cameraFrameTimer);
+                cameraFrameTimer = null;
+            }
+
+            if (cameraMediaStream) {
+                cameraMediaStream.getTracks().forEach(track => track.stop());
+                cameraMediaStream = null;
+            }
+
+            if (videoPlayer.srcObject) {
+                videoPlayer.srcObject = null;
+            }
+
+            videoPlayer.controls = true;
+        }
 
         async function startStreaming() {
             if (!selectedVideoId) {
@@ -606,6 +754,10 @@
 
         async function stopStreaming(fromEnded = false) {
             stopStreamStepLoop();
+            if (cameraFrameTimer) {
+                clearInterval(cameraFrameTimer);
+                cameraFrameTimer = null;
+            }
             stopStatusPolling();
 
             if (!fromEnded) {
@@ -614,16 +766,20 @@
 
             if (!currentStreamId) {
                 isStreaming = false;
+                stopCameraTracks();
                 addLog("Streaming stopped by user", "log-frame");
                 return;
             }
 
             const streamToStop = currentStreamId;
+            const wasCameraMode = isCameraMode;
             isStreaming = false;
+            isCameraMode = false;
+            stopCameraTracks();
 
             try {
-                addLog(`Stopping stream: ${AI_BASE}/stop_stream`, "log-event");
-                const res = await fetch(`${AI_BASE}/stop_stream`, {
+                addLog(`Stopping stream: ${AI_BASE}/${wasCameraMode ? "stop_camera_stream" : "stop_stream"}`, "log-event");
+                const res = await fetch(`${AI_BASE}/${wasCameraMode ? "stop_camera_stream" : "stop_stream"}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
