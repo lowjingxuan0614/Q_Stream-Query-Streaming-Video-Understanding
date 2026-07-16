@@ -428,8 +428,15 @@
     </footer>
 
     <script>
-        const APP_BASE = window.location.origin;
+        const APP_BASE = "http://localhost:5500";
         const AI_BASE = "http://localhost:8000";
+
+        function appFetch(path, options = {}) {
+            return fetch(`${APP_BASE}${path}`, {
+                ...options,
+                credentials: "include"
+            });
+        }
 
         let isStreaming = false;
         let selectedVideoId = "";
@@ -439,6 +446,11 @@
         let statusPollTimer = null;
         let cameraMediaStream = null;
         let cameraFrameTimer = null;
+        let cameraRecorder = null;
+        let cameraRecordingChunks = [];
+        let cameraRecordingBlob = null;
+        let cameraRecordingMimeType = "";
+        let cameraRecordingStartedAt = null;
         let isCameraMode = false;
         let renderedLogIndex = 0;
         let currentUser = null;
@@ -467,9 +479,9 @@
 
         async function requireLogin() {
             try {
-                const res = await fetch(`${APP_BASE}/api/me`);
+                const res = await appFetch("/api/me");
                 if (!res.ok) {
-                    window.location.href = "login.html";
+                    window.location.href = `${APP_BASE}/login.html`;
                     return null;
                 }
 
@@ -478,7 +490,7 @@
                 return currentUser;
             } catch (err) {
                 console.error(err);
-                window.location.href = "login.html";
+                window.location.href = `${APP_BASE}/login.html`;
                 return null;
             }
         }
@@ -575,6 +587,7 @@
                 });
 
                 isCameraMode = true;
+                startCameraRecording(cameraMediaStream);
 
                 videoPlayer.srcObject = cameraMediaStream;
                 videoPlayer.removeAttribute("src");
@@ -615,6 +628,74 @@
                 isCameraMode = false;
                 currentStreamId = null;
             }
+        }
+
+        function getSupportedRecordingMimeType() {
+            const preferredTypes = [
+                "video/webm;codecs=vp9",
+                "video/webm;codecs=vp8",
+                "video/webm",
+                "video/mp4"
+            ];
+
+            return preferredTypes.find(type => MediaRecorder.isTypeSupported(type)) || "";
+        }
+
+        function startCameraRecording(stream) {
+            cameraRecordingChunks = [];
+            cameraRecordingBlob = null;
+            cameraRecordingMimeType = getSupportedRecordingMimeType();
+            cameraRecordingStartedAt = new Date();
+
+            try {
+                const options = cameraRecordingMimeType
+                    ? { mimeType: cameraRecordingMimeType }
+                    : undefined;
+
+                cameraRecorder = new MediaRecorder(stream, options);
+                cameraRecorder.addEventListener("dataavailable", event => {
+                    if (event.data && event.data.size > 0) {
+                        cameraRecordingChunks.push(event.data);
+                    }
+                });
+
+                cameraRecorder.start(1000);
+                addLog("Camera recording started. The recording will be saved with the bookmark.", "log-frame");
+            } catch (err) {
+                console.error(err);
+                cameraRecorder = null;
+                addLog(`Camera recording could not start: ${err.message}`, "log-answer");
+            }
+        }
+
+        function stopCameraRecording() {
+            return new Promise(resolve => {
+                if (cameraRecordingBlob) {
+                    resolve(cameraRecordingBlob);
+                    return;
+                }
+
+                if (!cameraRecorder || cameraRecorder.state === "inactive") {
+                    if (cameraRecordingChunks.length) {
+                        cameraRecordingBlob = new Blob(cameraRecordingChunks, {
+                            type: cameraRecordingMimeType || "video/webm"
+                        });
+                    }
+                    resolve(cameraRecordingBlob);
+                    return;
+                }
+
+                const handleStop = () => {
+                    cameraRecordingBlob = new Blob(cameraRecordingChunks, {
+                        type: cameraRecorder.mimeType || cameraRecordingMimeType || "video/webm"
+                    });
+                    cameraRecordingMimeType = cameraRecordingBlob.type;
+                    resolve(cameraRecordingBlob);
+                };
+
+                cameraRecorder.addEventListener("stop", handleStop, { once: true });
+                cameraRecorder.stop();
+            });
         }
 
         async function sendCameraFrame() {
@@ -774,6 +855,11 @@
             const streamToStop = currentStreamId;
             const wasCameraMode = isCameraMode;
             isStreaming = false;
+
+            if (wasCameraMode) {
+                await stopCameraRecording();
+            }
+
             isCameraMode = false;
             stopCameraTracks();
 
@@ -829,6 +915,11 @@
             lastCompletedEventCount = 0;
             stopStreamStepLoop();
             stopStatusPolling();
+            cameraRecorder = null;
+            cameraRecordingChunks = [];
+            cameraRecordingBlob = null;
+            cameraRecordingMimeType = "";
+            cameraRecordingStartedAt = null;
             document.getElementById('answerDisplay').textContent = "Ask a question to retrieve evidence-grounded answer...";
             document.getElementById('evidenceDisplay').style.display = "none";
         }
@@ -968,6 +1059,58 @@
             logContainer.scrollTop = logContainer.scrollHeight;
         }
 
+        const RECORDING_DB_NAME = "QStreamCameraRecordings";
+        const RECORDING_DB_VERSION = 1;
+        const RECORDING_STORE_NAME = "recordings";
+
+        function openRecordingDatabase() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(RECORDING_DB_NAME, RECORDING_DB_VERSION);
+
+                request.addEventListener("upgradeneeded", () => {
+                    const db = request.result;
+                    if (!db.objectStoreNames.contains(RECORDING_STORE_NAME)) {
+                        db.createObjectStore(RECORDING_STORE_NAME, { keyPath: "bookmarkId" });
+                    }
+                });
+
+                request.addEventListener("success", () => resolve(request.result));
+                request.addEventListener("error", () => reject(
+                    request.error || new Error("Unable to open the camera recording database.")
+                ));
+            });
+        }
+
+        async function saveRecordingLocally(bookmarkId, recording, extension) {
+            const db = await openRecordingDatabase();
+
+            try {
+                await new Promise((resolve, reject) => {
+                    const transaction = db.transaction(RECORDING_STORE_NAME, "readwrite");
+                    const store = transaction.objectStore(RECORDING_STORE_NAME);
+
+                    store.put({
+                        bookmarkId: String(bookmarkId),
+                        blob: recording,
+                        extension,
+                        mimeType: recording.type || "video/webm",
+                        size: recording.size,
+                        savedAt: new Date().toISOString()
+                    });
+
+                    transaction.addEventListener("complete", resolve);
+                    transaction.addEventListener("error", () => reject(
+                        transaction.error || new Error("Unable to save the camera recording locally.")
+                    ));
+                    transaction.addEventListener("abort", () => reject(
+                        transaction.error || new Error("Saving the camera recording was cancelled.")
+                    ));
+                });
+            } finally {
+                db.close();
+            }
+        }
+
         async function saveLog() {
             const logs = Array.from(logContainer.querySelectorAll(".log-entry"))
                 .map(entry => entry.textContent)
@@ -979,31 +1122,90 @@
                 return;
             }
 
+            let createdBookmarkId = null;
+
             try {
-                const res = await fetch(`${APP_BASE}/api/bookmarks`, {
+                const isCameraBookmark =
+                    (isCameraMode || selectedVideoId === "camera") &&
+                    (cameraRecorder || cameraRecordingBlob);
+
+                let recording = null;
+                let extension = "webm";
+
+                if (isCameraBookmark) {
+                    recording = await stopCameraRecording();
+
+                    if (!recording || recording.size === 0) {
+                        throw new Error("The camera recording is empty and cannot be saved.");
+                    }
+
+                    extension = recording.type.includes("mp4") ? "mp4" : "webm";
+                    addLog(
+                        `Camera recording prepared: ${(recording.size / 1024 / 1024).toFixed(2)} MB`,
+                        "log-memory"
+                    );
+                }
+
+                // Step 1: save the bookmark metadata and text as normal JSON.
+                addLog(`Saving bookmark log to ${APP_BASE}/api/bookmarks`, "log-memory");
+                const bookmarkRes = await appFetch("/api/bookmarks", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         video_id: selectedVideoId || null,
                         video_title: selectedVideoInfo?.displayName || selectedVideoInfo?.filename || "Unsaved video log",
-                        log_text: logs
+                        log_text: logs,
+                        source_type: isCameraBookmark ? "camera" : "dataset",
+                        recorded_at: isCameraBookmark
+                            ? (cameraRecordingStartedAt || new Date()).toISOString()
+                            : null
                     })
                 });
 
-                if (res.status === 401) {
-                    window.location.href = "login.html";
+                if (bookmarkRes.status === 401) {
+                    window.location.href = `${APP_BASE}/login.html`;
                     return;
                 }
 
-                if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
-                    throw new Error(data.error || `Save failed with status ${res.status}`);
+                const bookmarkData = await bookmarkRes.json().catch(() => ({}));
+                if (!bookmarkRes.ok) {
+                    throw new Error(bookmarkData.error || `Save failed with status ${bookmarkRes.status}`);
+                }
+
+                const bookmark = bookmarkData.bookmark;
+                createdBookmarkId = bookmark?.id;
+
+                if (!createdBookmarkId) {
+                    throw new Error("Bookmark was created but its ID was not returned.");
+                }
+
+                // Step 2: save the camera recording in browser IndexedDB.
+                // This avoids fragile large HTTP uploads while keeping the video after refresh/restart.
+                if (isCameraBookmark && recording) {
+                    addLog("Saving camera recording in browser storage...", "log-memory");
+                    await saveRecordingLocally(createdBookmarkId, recording, extension);
+                    addLog("Camera recording saved successfully with this bookmark.", "log-memory");
                 }
 
                 saveLogNotice.classList.add('show');
             } catch (err) {
                 console.error(err);
-                alert(`Failed to save log: ${err.message}`);
+
+                // Avoid leaving a log-only camera bookmark when its recording cannot be saved.
+                if (createdBookmarkId) {
+                    try {
+                        await appFetch(`/api/bookmarks/${createdBookmarkId}`, {
+                            method: "DELETE"
+                        });
+                    } catch (cleanupError) {
+                        console.warn("Could not remove incomplete bookmark:", cleanupError);
+                    }
+                }
+
+                const networkHint = err instanceof TypeError
+                    ? `\nPage URL: ${window.location.href}\nBookmark server: ${APP_BASE}\nCheck the PowerShell server window and Chrome DevTools > Network.`
+                    : "";
+                alert(`Failed to save log: ${err.message}${networkHint}`);
             }
         }
 

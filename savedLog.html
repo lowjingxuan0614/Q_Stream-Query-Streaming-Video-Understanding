@@ -100,6 +100,33 @@
             opacity: 0.55;
         }
 
+        .saved-video-wrap {
+            display: none;
+            margin-bottom: 18px;
+            border: 1px solid #dbeafe;
+            border-radius: 16px;
+            background: #eff6ff;
+            padding: 14px;
+        }
+
+        .saved-video-wrap.show {
+            display: block;
+        }
+
+        .saved-video-title {
+            margin-bottom: 10px;
+            color: #1e3a8a;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .saved-video-player {
+            width: 100%;
+            max-height: 520px;
+            border-radius: 12px;
+            background: #000;
+        }
+
         .saved-log-container {
             border: 1px solid #e5e7eb;
             border-radius: 16px;
@@ -198,20 +225,100 @@
             </div>
 
             <p class="saved-log-status" id="savedLogStatus" aria-live="polite"></p>
+            <div class="saved-video-wrap" id="savedVideoWrap">
+                <div class="saved-video-title">Recorded camera video</div>
+                <video class="saved-video-player" id="savedVideoPlayer" controls playsinline preload="metadata"></video>
+            </div>
             <div class="saved-log-container" id="savedLogContainer"></div>
             </div>
         </div>
     </main>
 
     <script>
-        const API_BASE = window.location.origin;
+        const API_BASE = "http://localhost:5500";
+
+        function apiFetch(path, options = {}) {
+            return fetch(`${API_BASE}${path}`, {
+                ...options,
+                credentials: "include"
+            });
+        }
         const savedLogVideo = document.getElementById('savedLogVideo');
         const savedLogContainer = document.getElementById('savedLogContainer');
         const savedLogStatus = document.getElementById('savedLogStatus');
         const deleteSavedLog = document.getElementById('deleteSavedLog');
+        const savedVideoWrap = document.getElementById('savedVideoWrap');
+        const savedVideoPlayer = document.getElementById('savedVideoPlayer');
         let savedBookmarks = [];
         let isRemovingEntry = false;
         let isDeletingLog = false;
+        let currentVideoObjectUrl = null;
+
+        const RECORDING_DB_NAME = "QStreamCameraRecordings";
+        const RECORDING_DB_VERSION = 1;
+        const RECORDING_STORE_NAME = "recordings";
+
+        function openRecordingDatabase() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(RECORDING_DB_NAME, RECORDING_DB_VERSION);
+
+                request.addEventListener("upgradeneeded", () => {
+                    const db = request.result;
+                    if (!db.objectStoreNames.contains(RECORDING_STORE_NAME)) {
+                        db.createObjectStore(RECORDING_STORE_NAME, { keyPath: "bookmarkId" });
+                    }
+                });
+
+                request.addEventListener("success", () => resolve(request.result));
+                request.addEventListener("error", () => reject(
+                    request.error || new Error("Unable to open the camera recording database.")
+                ));
+            });
+        }
+
+        async function getLocalRecording(bookmarkId) {
+            const db = await openRecordingDatabase();
+            try {
+                return await new Promise((resolve, reject) => {
+                    const transaction = db.transaction(RECORDING_STORE_NAME, "readonly");
+                    const request = transaction.objectStore(RECORDING_STORE_NAME).get(String(bookmarkId));
+                    request.addEventListener("success", () => resolve(request.result || null));
+                    request.addEventListener("error", () => reject(
+                        request.error || new Error("Unable to load the saved camera recording.")
+                    ));
+                });
+            } finally {
+                db.close();
+            }
+        }
+
+        async function deleteLocalRecording(bookmarkId) {
+            const db = await openRecordingDatabase();
+            try {
+                await new Promise((resolve, reject) => {
+                    const transaction = db.transaction(RECORDING_STORE_NAME, "readwrite");
+                    transaction.objectStore(RECORDING_STORE_NAME).delete(String(bookmarkId));
+                    transaction.addEventListener("complete", resolve);
+                    transaction.addEventListener("error", () => reject(
+                        transaction.error || new Error("Unable to delete the saved camera recording.")
+                    ));
+                });
+            } finally {
+                db.close();
+            }
+        }
+
+        function clearSavedVideo() {
+            savedVideoPlayer.pause();
+            savedVideoPlayer.removeAttribute('src');
+            savedVideoPlayer.load();
+            savedVideoWrap.classList.remove('show');
+
+            if (currentVideoObjectUrl) {
+                URL.revokeObjectURL(currentVideoObjectUrl);
+                currentVideoObjectUrl = null;
+            }
+        }
 
         document.addEventListener('DOMContentLoaded', async () => {
             const user = await requireLogin();
@@ -222,9 +329,9 @@
 
         async function requireLogin() {
             try {
-                const res = await fetch(`${API_BASE}/api/me`);
+                const res = await apiFetch("/api/me");
                 if (!res.ok) {
-                    window.location.href = 'login.html';
+                    window.location.href = `${API_BASE}/login.html`;
                     return null;
                 }
 
@@ -232,16 +339,16 @@
                 return data.user;
             } catch (err) {
                 console.error(err);
-                window.location.href = 'login.html';
+                window.location.href = `${API_BASE}/login.html`;
                 return null;
             }
         }
 
         async function loadSavedLogs() {
             try {
-                const res = await fetch(`${API_BASE}/api/bookmarks`);
+                const res = await apiFetch("/api/bookmarks");
                 if (res.status === 401) {
-                    window.location.href = 'login.html';
+                    window.location.href = `${API_BASE}/login.html`;
                     return;
                 }
 
@@ -298,7 +405,7 @@
             return `${title} - ${dateText}`;
         }
 
-        function renderSelectedLog() {
+        async function renderSelectedLog() {
             const bookmark = selectedBookmark();
 
             if (!bookmark) {
@@ -306,6 +413,7 @@
                 return;
             }
 
+            await renderSavedVideo(bookmark);
             savedLogContainer.innerHTML = '';
             const entries = bookmarkEntries(bookmark);
 
@@ -358,18 +466,24 @@
             renderStatus('');
 
             try {
-                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmark.id}`, {
+                const res = await apiFetch(`/api/bookmarks/${bookmark.id}`, {
                     method: 'DELETE'
                 });
 
                 if (res.status === 401) {
-                    window.location.href = 'login.html';
+                    window.location.href = `${API_BASE}/login.html`;
                     return;
                 }
 
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
                     throw new Error(data.error || `Delete failed with status ${res.status}`);
+                }
+
+                try {
+                    await deleteLocalRecording(bookmarkId);
+                } catch (storageError) {
+                    console.warn("The bookmark was deleted, but its local recording could not be removed:", storageError);
                 }
 
                 savedBookmarks = savedBookmarks.filter(item => String(item.id) !== bookmarkId);
@@ -402,7 +516,7 @@
             renderStatus('');
 
             try {
-                const res = await fetch(`${API_BASE}/api/bookmarks/${bookmark.id}`, {
+                const res = await apiFetch(`/api/bookmarks/${bookmark.id}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -413,7 +527,7 @@
                 });
 
                 if (res.status === 401) {
-                    window.location.href = 'login.html';
+                    window.location.href = `${API_BASE}/login.html`;
                     return;
                 }
 
@@ -433,6 +547,34 @@
                 renderStatus(`Failed to remove log entry: ${err.message}`, 'error');
             } finally {
                 setRemovingEntry(false);
+            }
+        }
+
+        async function renderSavedVideo(bookmark) {
+            clearSavedVideo();
+
+            try {
+                const localRecording = await getLocalRecording(bookmark.id);
+                if (localRecording?.blob) {
+                    currentVideoObjectUrl = URL.createObjectURL(localRecording.blob);
+                    savedVideoPlayer.src = currentVideoObjectUrl;
+                    savedVideoPlayer.load();
+                    savedVideoWrap.classList.add('show');
+                    return;
+                }
+            } catch (err) {
+                console.error("Unable to load local camera recording:", err);
+                renderStatus(`Saved log loaded, but its local video could not be opened: ${err.message}`, 'error');
+            }
+
+            // Backward compatibility for recordings previously saved by the server.
+            const videoUrl = bookmark.video_url || bookmark.recording_url || '';
+            if (videoUrl) {
+                savedVideoPlayer.src = videoUrl.startsWith('http')
+                    ? videoUrl
+                    : `${API_BASE}${videoUrl.startsWith('/') ? '' : '/'}${videoUrl}`;
+                savedVideoPlayer.load();
+                savedVideoWrap.classList.add('show');
             }
         }
 
@@ -477,6 +619,7 @@
         }
 
         function renderMessage(text) {
+            clearSavedVideo();
             savedLogContainer.innerHTML = '';
             const message = document.createElement('div');
             message.className = 'saved-log-empty';
