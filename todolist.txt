@@ -1,6 +1,6 @@
 1. search answer based on 7wh /
-2. edit the log appears /
-3. saved log can still ask question
+2. edit the log appears 
+3. saved log can still ask question/
 4. generate answer, timestamp can be clicked and rewind to that part/
 5. check the sanity of the camera, and think what can be demo
 6. add titration video. some experimental videos

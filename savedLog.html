@@ -127,6 +127,13 @@
             background: #000;
         }
 
+        .saved-log-threads-title {
+            margin: 22px 0 10px;
+            color: #1f2937;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
         .saved-log-container {
             border: 1px solid #e5e7eb;
             border-radius: 16px;
@@ -188,6 +195,134 @@
             color: #64748b;
             font-size: 14px;
         }
+
+        .saved-qa-panel {
+            margin-top: 22px;
+            border: 1px solid #dbeafe;
+            border-radius: 16px;
+            background: #ffffff;
+            padding: 18px;
+        }
+
+        .saved-qa-title {
+            color: #1e3a8a;
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .saved-qa-description {
+            color: #64748b;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+
+        .saved-qa-input-wrap {
+            position: relative;
+            margin-bottom: 12px;
+        }
+
+        .saved-qa-input {
+            width: 100%;
+            min-height: 44px;
+            max-height: 120px;
+            padding: 11px 52px 11px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            resize: vertical;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .saved-qa-input:focus {
+            border-color: #165DFF;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.12);
+        }
+
+        .saved-qa-send {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            border: none;
+            background: transparent;
+            color: #165DFF;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 6px;
+        }
+
+        .saved-qa-send:disabled {
+            cursor: wait;
+            opacity: 0.5;
+        }
+
+        .saved-qa-answer-box {
+            min-height: 100px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            background: #f8fafc;
+            padding: 12px;
+        }
+
+        .saved-qa-answer-title {
+            color: #374151;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .saved-qa-answer {
+            color: #374151;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .saved-qa-evidence {
+            display: none;
+            margin-top: 10px;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #334155;
+            padding: 10px;
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
+        .saved-qa-evidence.show {
+            display: block;
+        }
+
+        .saved-qa-timelines {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 9px;
+        }
+
+        .saved-qa-timeline {
+            border: 1px solid #93c5fd;
+            border-radius: 999px;
+            background: white;
+            color: #1d4ed8;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 5px 10px;
+        }
+
+        .saved-qa-timeline:hover {
+            background: #dbeafe;
+        }
+
+        .saved-qa-timeline-static {
+            border-radius: 999px;
+            background: #e2e8f0;
+            color: #475569;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 5px 10px;
+        }
     </style>
 </head>
 <body class="font-inter bg-gray-50 min-h-screen">
@@ -226,9 +361,39 @@
 
             <p class="saved-log-status" id="savedLogStatus" aria-live="polite"></p>
             <div class="saved-video-wrap" id="savedVideoWrap">
-                <div class="saved-video-title">Recorded camera video</div>
+                <div class="saved-video-title" id="savedVideoTitle">Recorded camera video</div>
                 <video class="saved-video-player" id="savedVideoPlayer" controls playsinline preload="metadata"></video>
             </div>
+            <section class="saved-qa-panel" aria-labelledby="savedQaTitle">
+                <div class="saved-qa-title" id="savedQaTitle">💬 Question & Answer</div>
+                <p class="saved-qa-description">
+                    The answer is generated only from the saved log currently selected above.
+                </p>
+                <div class="saved-qa-input-wrap">
+                    <textarea
+                        class="saved-qa-input"
+                        id="savedLogQuestion"
+                        placeholder="Ask a question about the selected saved log..."
+                    ></textarea>
+                    <button
+                        class="saved-qa-send"
+                        id="savedLogQuestionButton"
+                        type="button"
+                        aria-label="Ask selected saved log"
+                    >
+                        <i class="fas fa-paper-plane" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="saved-qa-answer-box">
+                    <div class="saved-qa-answer-title">Answer:</div>
+                    <div class="saved-qa-answer" id="savedLogAnswer">
+                        Select a saved log, then ask a question.
+                    </div>
+                    <div class="saved-qa-evidence" id="savedLogEvidence"></div>
+                </div>
+            </section>
+
+            <div class="saved-log-threads-title">Saved Log Threads</div>
             <div class="saved-log-container" id="savedLogContainer"></div>
             </div>
         </div>
@@ -236,6 +401,9 @@
 
     <script>
         const API_BASE = "http://localhost:5500";
+        const AI_BASE = "http://localhost:8000";
+        const MODEL_NAME = "qwen2.5vl:7b";
+        const SAVED_LOG_MAX_EVIDENCE = 8;
 
         function apiFetch(path, options = {}) {
             return fetch(`${API_BASE}${path}`, {
@@ -249,9 +417,15 @@
         const deleteSavedLog = document.getElementById('deleteSavedLog');
         const savedVideoWrap = document.getElementById('savedVideoWrap');
         const savedVideoPlayer = document.getElementById('savedVideoPlayer');
+        const savedVideoTitle = document.getElementById('savedVideoTitle');
+        const savedLogQuestion = document.getElementById('savedLogQuestion');
+        const savedLogQuestionButton = document.getElementById('savedLogQuestionButton');
+        const savedLogAnswer = document.getElementById('savedLogAnswer');
+        const savedLogEvidence = document.getElementById('savedLogEvidence');
         let savedBookmarks = [];
         let isRemovingEntry = false;
         let isDeletingLog = false;
+        let isAskingSavedLog = false;
         let currentVideoObjectUrl = null;
 
         const RECORDING_DB_NAME = "QStreamCameraRecordings";
@@ -447,7 +621,20 @@
 
         savedLogVideo.addEventListener('change', event => {
             renderStatus('');
+            resetSavedLogAnswer();
             renderSelectedLog(event.target.value);
+        });
+
+        savedLogQuestionButton.addEventListener('click', submitSavedLogQuestion);
+        savedLogQuestion.addEventListener('keydown', event => {
+            if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                !event.isComposing
+            ) {
+                event.preventDefault();
+                submitSavedLogQuestion();
+            }
         });
 
         deleteSavedLog.addEventListener('click', async () => {
@@ -556,6 +743,7 @@
             try {
                 const localRecording = await getLocalRecording(bookmark.id);
                 if (localRecording?.blob) {
+                    savedVideoTitle.textContent = 'Recorded camera video';
                     currentVideoObjectUrl = URL.createObjectURL(localRecording.blob);
                     savedVideoPlayer.src = currentVideoObjectUrl;
                     savedVideoPlayer.load();
@@ -570,11 +758,199 @@
             // Backward compatibility for recordings previously saved by the server.
             const videoUrl = bookmark.video_url || bookmark.recording_url || '';
             if (videoUrl) {
+                savedVideoTitle.textContent = 'Recorded camera video';
                 savedVideoPlayer.src = videoUrl.startsWith('http')
                     ? videoUrl
                     : `${API_BASE}${videoUrl.startsWith('/') ? '' : '/'}${videoUrl}`;
                 savedVideoPlayer.load();
                 savedVideoWrap.classList.add('show');
+                return;
+            }
+
+            // Dataset bookmarks can be reopened from the AutoDL video endpoint.
+            if (bookmark.source_type === 'dataset' && bookmark.video_id) {
+                savedVideoTitle.textContent = bookmark.video_title || 'Saved dataset video';
+                savedVideoPlayer.src = `${AI_BASE}/video/${encodeURIComponent(bookmark.video_id)}`;
+                savedVideoPlayer.load();
+                savedVideoWrap.classList.add('show');
+            }
+        }
+
+        function resetSavedLogAnswer() {
+            savedLogAnswer.textContent = 'Ask a question about the selected saved log.';
+            savedLogEvidence.classList.remove('show');
+            savedLogEvidence.innerHTML = '';
+        }
+
+        function setSavedLogAsking(isAsking) {
+            isAskingSavedLog = isAsking;
+            savedLogQuestion.disabled = isAsking;
+            savedLogQuestionButton.disabled = isAsking;
+            savedLogQuestionButton.innerHTML = isAsking
+                ? '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i>'
+                : '<i class="fas fa-paper-plane" aria-hidden="true"></i>';
+        }
+
+        function formatTimeline(seconds) {
+            const numeric = Number(seconds);
+            if (!Number.isFinite(numeric) || numeric < 0) return null;
+            const wholeSeconds = Math.floor(numeric);
+            const minutes = Math.floor(wholeSeconds / 60);
+            const remainingSeconds = wholeSeconds % 60;
+            return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+        }
+
+        async function seekSavedVideo(seconds, eventId) {
+            const numeric = Number(seconds);
+            if (!Number.isFinite(numeric) || numeric < 0 || !savedVideoPlayer.currentSrc) {
+                return;
+            }
+
+            if (savedVideoPlayer.readyState < 1) {
+                await new Promise(resolve => {
+                    savedVideoPlayer.addEventListener('loadedmetadata', resolve, { once: true });
+                });
+            }
+
+            savedVideoPlayer.currentTime = numeric;
+            savedVideoWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            await savedVideoPlayer.play().catch(() => {});
+            renderStatus(`Opened Event #${eventId} at ${formatTimeline(numeric)}.`, 'success');
+        }
+
+        function renderSavedLogEvidence(data) {
+            savedLogEvidence.innerHTML = '';
+
+            if (data.has_relevant_evidence === false) {
+                savedLogEvidence.classList.remove('show');
+                return;
+            }
+
+            const detectedType =
+                data.primary_question_type_7wh ||
+                data.question_types_7wh?.[0] ||
+                'Unknown';
+            const retrievedCount = Number(data.retrieved_event_count || 0);
+            const totalCount = Number(data.total_log_event_descriptions || 0);
+            const eventIds = Array.isArray(data.retrieved_event_ids)
+                ? data.retrieved_event_ids.join(', ')
+                : '';
+
+            const summary = document.createElement('div');
+            summary.textContent =
+                `Selected log only. Detected 7WH type: ${detectedType}. ` +
+                `Retrieved ${retrievedCount}/${totalCount} saved-log event descriptions. ` +
+                `Event IDs: ${eventIds || 'none'}.`;
+            savedLogEvidence.appendChild(summary);
+
+            const timelineEvents = Array.isArray(data.retrieved_events)
+                ? data.retrieved_events.filter(event =>
+                    Number.isFinite(Number(event.start_time)) &&
+                    event.start_time !== null
+                )
+                : [];
+
+            if (timelineEvents.length) {
+                const timelineTitle = document.createElement('div');
+                timelineTitle.style.marginTop = '8px';
+                timelineTitle.style.fontWeight = '700';
+                timelineTitle.textContent = 'Evidence timeline:';
+                savedLogEvidence.appendChild(timelineTitle);
+
+                const timelineWrap = document.createElement('div');
+                timelineWrap.className = 'saved-qa-timelines';
+                const canSeek = Boolean(savedVideoPlayer.currentSrc);
+
+                timelineEvents.forEach(event => {
+                    const label = formatTimeline(event.start_time);
+                    if (!label) return;
+
+                    if (canSeek) {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'saved-qa-timeline';
+                        button.textContent = `▶ ${label}`;
+                        button.title = `Open Event #${event.event_id} at ${label}`;
+                        button.addEventListener('click', () =>
+                            seekSavedVideo(event.start_time, event.event_id)
+                        );
+                        timelineWrap.appendChild(button);
+                    } else {
+                        const item = document.createElement('span');
+                        item.className = 'saved-qa-timeline-static';
+                        item.textContent = `🕒 ${label}`;
+                        timelineWrap.appendChild(item);
+                    }
+                });
+
+                savedLogEvidence.appendChild(timelineWrap);
+            }
+
+            savedLogEvidence.classList.add('show');
+        }
+
+        async function submitSavedLogQuestion() {
+            if (isAskingSavedLog) return;
+
+            const bookmark = selectedBookmark();
+            const question = savedLogQuestion.value.trim();
+
+            if (!bookmark) {
+                alert('Please select a saved log first.');
+                return;
+            }
+            if (!question) {
+                alert('Please enter a question.');
+                return;
+            }
+            if (!(bookmark.log_text || '').trim()) {
+                alert('The selected saved log is empty.');
+                return;
+            }
+
+            // Clear immediately after a valid submission and keep the input ready.
+            savedLogQuestion.value = '';
+            savedLogQuestion.focus();
+            savedLogAnswer.textContent = 'Retrieving an answer from the selected saved log only...';
+            savedLogEvidence.classList.remove('show');
+            savedLogEvidence.innerHTML = '';
+            setSavedLogAsking(true);
+
+            try {
+                const response = await fetch(`${AI_BASE}/ask_saved_log`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bookmark_id: String(bookmark.id),
+                        bookmark_title: bookmark.video_title || bookmark.video_id || 'Selected saved log',
+                        log_text: bookmark.log_text || '',
+                        question,
+                        model: MODEL_NAME,
+                        max_entries: SAVED_LOG_MAX_EVIDENCE
+                    })
+                });
+
+                if (!response.ok) {
+                    const message = await response.text();
+                    throw new Error(message || `Saved-log Q&A failed with status ${response.status}`);
+                }
+
+                const data = await response.json();
+                savedLogAnswer.textContent = data.answer || 'No answer was returned.';
+                renderSavedLogEvidence(data);
+                if (data.has_relevant_evidence === false) {
+                    renderStatus('');
+                } else {
+                    renderStatus('Answer generated from the selected saved log only.', 'success');
+                }
+            } catch (err) {
+                console.error(err);
+                savedLogAnswer.textContent =
+                    'Unable to answer from the selected saved log. Check the AutoDL API and try again.';
+                renderStatus(`Saved-log Q&A failed: ${err.message}`, 'error');
+            } finally {
+                setSavedLogAsking(false);
+                savedLogQuestion.focus();
             }
         }
 
