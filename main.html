@@ -262,6 +262,57 @@
             color: #4a5568;
         }
 
+        .timeline-heading {
+            margin-top: 8px;
+            margin-bottom: 6px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .timeline-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+
+        .timeline-badge,
+        .timeline-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            min-height: 30px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .timeline-badge {
+            border: 1px solid #cbd5e1;
+            background: #e2e8f0;
+            color: #475569;
+            cursor: default;
+        }
+
+        .timeline-link {
+            border: 1px solid #93c5fd;
+            background: #eff6ff;
+            color: #1d4ed8;
+            cursor: pointer;
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+
+        .timeline-link:hover {
+            background: #dbeafe;
+            transform: translateY(-1px);
+        }
+
+        .timeline-note {
+            margin-top: 6px;
+            color: #64748b;
+            font-size: 12px;
+        }
+
         .save-log-popout {
             display: none;
             position: fixed;
@@ -471,6 +522,18 @@
         let saveLogNotice = document.getElementById('saveLogNotice');
 
         document.addEventListener("DOMContentLoaded", async () => {
+            const userQueryInput = document.getElementById("userQuery");
+            userQueryInput.addEventListener("keydown", event => {
+                if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.isComposing
+                ) {
+                    event.preventDefault();
+                    submitQuestion();
+                }
+            });
+
             const user = await requireLogin();
             if (user) {
                 loadDatasetVideos();
@@ -1213,8 +1276,92 @@
             saveLogNotice.classList.remove('show');
         }
 
+        function formatTimelineTime(seconds) {
+            const value = Number(seconds);
+            if (!Number.isFinite(value) || value < 0) return "0:00";
+
+            const totalSeconds = Math.floor(value);
+            const minutes = Math.floor(totalSeconds / 60);
+            const remainingSeconds = totalSeconds % 60;
+            return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+        }
+
+        function jumpToEvidenceTime(seconds, eventId) {
+            const targetTime = Number(seconds);
+            if (!Number.isFinite(targetTime)) return;
+
+            videoPlayer.currentTime = Math.max(0, targetTime);
+            videoPlayer.scrollIntoView({ behavior: "smooth", block: "center" });
+            videoPlayer.play().catch(() => {
+                addLog(
+                    `Jumped to Event #${eventId} at ${formatTimelineTime(targetTime)}. Press play to continue.`,
+                    "log-frame"
+                );
+            });
+
+            addLog(
+                `Timeline selected: Event #${eventId} at ${formatTimelineTime(targetTime)}`,
+                "log-answer"
+            );
+        }
+
+        function renderEvidenceTimeline(container, retrievedEvents) {
+            const events = Array.isArray(retrievedEvents)
+                ? retrievedEvents.filter(event => Number.isFinite(Number(event.start_time)))
+                : [];
+
+            if (!events.length) return;
+
+            const heading = document.createElement("div");
+            heading.className = "timeline-heading";
+            heading.textContent = "Evidence timeline:";
+            container.appendChild(heading);
+
+            const list = document.createElement("div");
+            list.className = "timeline-list";
+
+            const canSeekTimeline =
+                !isStreaming &&
+                selectedVideoId !== "camera" &&
+                !videoPlayer.srcObject;
+
+            events.forEach(event => {
+                const startTime = Number(event.start_time);
+                const eventId = event.event_id ?? "?";
+                const label = formatTimelineTime(startTime);
+
+                if (canSeekTimeline) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "timeline-link";
+                    button.innerHTML = `<i class="fas fa-play"></i><span>${label}</span>`;
+                    button.title = `Jump to Event #${eventId} at ${label}`;
+                    button.addEventListener("click", () => {
+                        jumpToEvidenceTime(startTime, eventId);
+                    });
+                    list.appendChild(button);
+                } else {
+                    const badge = document.createElement("span");
+                    badge.className = "timeline-badge";
+                    badge.innerHTML = `<i class="fas fa-clock"></i><span>${label}</span>`;
+                    badge.title = `Event #${eventId}`;
+                    list.appendChild(badge);
+                }
+            });
+
+            container.appendChild(list);
+
+            const note = document.createElement("div");
+            note.className = "timeline-note";
+            note.textContent = canSeekTimeline
+                ? "The stream is stopped. Select a timeline to jump to that point in the video."
+                : "The stream is active. Timelines are shown for reference and become clickable after stopping.";
+            container.appendChild(note);
+        }
+
         async function submitQuestion() {
-            const question = document.getElementById('userQuery').value.trim();
+            const queryInput = document.getElementById('userQuery');
+            const question = queryInput.value.trim();
 
             if (!question) {
                 alert("Please enter a question!");
@@ -1231,6 +1378,10 @@
                 return;
             }
 
+            // Clear the submitted question while preserving it in the local variable above.
+            queryInput.value = "";
+            queryInput.focus();
+
             // Process up to the exact current video time before answering.
             await processCurrentVideoTime();
 
@@ -1246,7 +1397,7 @@
                         stream_id: currentStreamId,
                         question: question,
                         model: MODEL_NAME,
-                        max_events: 120,
+                        max_events: 8,
                         include_open_event: false
                     })
                 });
@@ -1261,10 +1412,44 @@
                 document.getElementById('answerDisplay').textContent = data.answer;
 
                 const evidenceEl = document.getElementById('evidenceDisplay');
-                evidenceEl.textContent = `Streaming evidence used: ${data.num_events_used}/${data.total_events} currently available event descriptions. Current video time: ${videoPlayer.currentTime.toFixed(2)}s`;
+
+                const detectedType =
+                    data.primary_question_type_7wh ||
+                    data.question_types_7wh?.[0] ||
+                    "Unknown";
+
+                const usedEventCount =
+                    data.num_events_used ??
+                    data.retrieved_event_count ??
+                    0;
+
+                const totalEventCount =
+                    data.total_json_events ??
+                    data.total_events ??
+                    0;
+
+                const retrievedEventIds =
+                    Array.isArray(data.retrieved_event_ids)
+                        ? data.retrieved_event_ids.join(", ")
+                        : "";
+
+                evidenceEl.replaceChildren();
+
+                const evidenceSummary = document.createElement("div");
+                evidenceSummary.textContent =
+                    `Detected 7WH type: ${detectedType}. ` +
+                    `Retrieved ${usedEventCount}/${totalEventCount} JSON events. ` +
+                    `Event IDs: ${retrievedEventIds || "none"}. ` +
+                    `Current video time: ${videoPlayer.currentTime.toFixed(2)}s`;
+                evidenceEl.appendChild(evidenceSummary);
+
+                renderEvidenceTimeline(evidenceEl, data.retrieved_events);
                 evidenceEl.style.display = "block";
 
-                addLog(`Generated answer using ${data.num_events_used}/${data.total_events} streaming event descriptions`, 'log-answer');
+                addLog(
+                    `Question type=${detectedType}; retrieved Event IDs=[${retrievedEventIds}]`,
+                    'log-answer'
+                );
             } catch (err) {
                 console.error(err);
                 const msg = String(err.message || "");
