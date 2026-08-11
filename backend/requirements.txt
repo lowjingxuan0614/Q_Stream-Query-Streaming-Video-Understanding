@@ -1,8 +1,0 @@
-opencv-python
-pillow
-numpy
-ftfy
-regex
-tqdm
-open_clip_torch
-yt-dlp
