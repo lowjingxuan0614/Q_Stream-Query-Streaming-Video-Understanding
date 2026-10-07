@@ -661,7 +661,7 @@ The current project setup is mostly complete, but the following points are impor
 | `uvicorn` | Installed by `setup_env.sh` | Runs FastAPI |
 | `pydantic` | Installed by `setup_env.sh` | Request/response models |
 | `python-multipart` | Installed by `setup_env.sh` | Required for video upload endpoint |
-| `pandas` | **Missing explicitly** | Required because `qstream_api_server.py` imports pandas |
+| `pandas` | Installed by setup_env.sh | Required because `qstream_api_server.py` imports pandas |
 | PyTorch + CUDA | Must be verified | Prefer a GPU image with CUDA-enabled PyTorch already installed |
 | Ollama | Checked, not guaranteed installed | Required for Qwen2.5-VL |
 | `qwen2.5vl:7b` | Checked, not automatically guaranteed | Run `ollama pull qwen2.5vl:7b` |
@@ -678,27 +678,9 @@ The current exported Q-Stream model records its linguistic feature mode as a sci
 
 ---
 
-# 14. Recommended Small Fix to `setup_env.sh`
 
-To make the remote setup reproducible on a clean GPU instance, add `pandas` to the Python dependency installation.
 
-For example, change:
-
-```bash
-pip install scikit-learn joblib requests -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-to:
-
-```bash
-pip install scikit-learn joblib requests pandas -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-Alternatively, add `pandas` to `requirements.txt`.
-
----
-
-# 15. Shutdown
+# 14. Shutdown
 
 When finished:
 
@@ -732,7 +714,7 @@ ssh -N -p [your ssh port] -L 8000:localhost:8000 root@connect.bjb1.seetacloud.co
 ### Windows local server
 
 ```powershell
-cd "D:\UOW\Degree\degree y3s2\IP1\A3\A3v1"
+cd "[your path]"
 pip install requests     # first time if needed
 python server.py --port 5500
 ```

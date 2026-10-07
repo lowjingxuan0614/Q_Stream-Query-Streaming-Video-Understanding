@@ -456,21 +456,26 @@
     </div>
 
     <!-- Q&A Panel (Full Width) -->
-    <div class="panel qa-panel">
-        <div class="panel-title">💬 Question & Answer</div>
-        <div class="qa-input-wrap">
-            <textarea class="qa-input" id="userQuery" placeholder="Ask a question about the video (e.g., What step happens first? When did the action start? How to make coffee?)"></textarea>
-            <button class="qa-send-btn" type="button" aria-label="Get answer" onclick="submitQuestion()">
-                <i class="fas fa-paper-plane"></i>
-            </button>
-        </div>
+    <!-- Q&A Panel (Full Width) -->
+<div class="panel qa-panel" style="min-height: 420px;">
+    <div class="panel-title">💬 Question & Answer</div>
 
-        <div class="answer-box" style="margin-top:10px;">
-            <div class="answer-title">Answer:</div>
-            <div class="answer-text" id="answerDisplay">Ask a question to retrieve evidence-grounded answer...</div>
-            <div class="evidence" id="evidenceDisplay" style="display:none;"></div>
-        </div>
+    <div class="qa-input-wrap">
+        <textarea class="qa-input" id="userQuery" placeholder="Ask a question about the video (e.g., What step happens first? When did the action start? How to make coffee?)"></textarea>
+
+        <button class="qa-send-btn" type="button" aria-label="Get answer" onclick="submitQuestion()">
+            <i class="fas fa-paper-plane"></i>
+        </button>
     </div>
+
+    <div class="answer-box" style="margin-top:10px; min-height:220px;">
+        <div class="answer-title">Answer:</div>
+        <div class="answer-text" id="answerDisplay">
+            Ask a question to retrieve evidence-grounded answer...
+        </div>
+        <div class="evidence" id="evidenceDisplay" style="display:none;"></div>
+    </div>
+</div>
         </div>
     </main>
 
@@ -513,7 +518,7 @@
         const SAMPLE_FPS = 1.0;
         const STEP_INTERVAL_MS = 1000;
         const STATUS_INTERVAL_MS = 1500;
-        const CAMERA_FRAME_INTERVAL_MS = 3000;
+        const CAMERA_FRAME_INTERVAL_MS = 500;
 
         let logContainer = document.getElementById('logContainer');
         let progressBar = document.getElementById('progressBar');
@@ -678,7 +683,7 @@
                 isStreaming = true;
 
                 addLog(`Camera stream initialized: ${currentStreamId}`, "log-event");
-                addLog("Camera mode will send one frame to backend every 3 seconds.", "log-memory");
+                addLog("Camera mode will send one frame to backend every 0.5 seconds.", "log-memory");
 
                 await sendCameraFrame();
                 cameraFrameTimer = setInterval(sendCameraFrame, CAMERA_FRAME_INTERVAL_MS);

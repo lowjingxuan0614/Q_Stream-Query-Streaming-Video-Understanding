@@ -1,0 +1,27 @@
+不是只跑 8003。8003 只是统一入口，它背后还要依赖 8000 / 8001 / 8002。
+
+你以后 demo 前，AutoDL 要确保这 4 个都在：
+
+# Terminal 1 — 原本 backend
+cd /root/autodl-tmp/Q_Stream
+python qstream_api_server.py
+# -> 8000
+
+# Terminal 2 — video demo
+cd /root/autodl-tmp/Q_Stream
+python qstream_demo.py
+# -> 8001
+
+# Terminal 3 — camera demo
+cd /root/autodl-tmp/Q_Stream
+python qstream_camera_demo.py
+# -> 8002
+
+# Terminal 4 — unified gateway
+cd /root/autodl-tmp/Q_Stream
+python qstream_demo_gateway.py
+# -> 8003
+
+然后 Windows 只需要 tunnel 到 8003：
+
+ssh -p <SSH_PORT> -L 8000:localhost:8003 root@<HOST>
